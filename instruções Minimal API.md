@@ -571,3 +571,1090 @@ gera automaticamente a tabela intermediária e popula suas chaves compostas.
 ### 1.4.7 Conclusão
 
 A população inicial do banco de dados é fundamental para garantir previsibilidade e facilitar o desenvolvimento de Minimal APIs. A abordagem apresentada permite estruturar dados iniciais de forma clara, escalável e alinhada às capacidades do Entity Framework Core.
+
+## 1.5 URL e Parâmetros
+
+### 1.5.1 Introdução
+
+Esta seção descreve como definir rotas em uma Minimal API utilizando parâmetros de URL. O objetivo é demonstrar como capturar valores dinâmicos enviados pelo cliente e utilizá‑los diretamente nos manipuladores de requisição.
+
+A abordagem utiliza o padrão `{parametro}` dentro da rota, permitindo que o ASP.NET Core faça o *binding* automático para tipos primitivos como `int` e `string`.
+
+### 1.5.2 Configuração Inicial
+
+A aplicação registra o `DbContext` e define rotas básicas para testes. O foco desta seção é o comportamento das rotas que utilizam parâmetros.
+
+#### 1.5.2.1 Código de Configuração
+
+    ```csharp
+    using Microsoft.EntityFrameworkCore;
+    using RangoAgil.API.DbContexts;
+
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Services.AddDbContext<RangoDbContext>(
+        o => o.UseSqlite(builder.Configuration["ConnectionStrings:RangoDBConStr"])
+    );
+
+    var app = builder.Build();
+
+    app.MapGet("/", () => "Hello World!");
+
+    app.MapGet("/rangos/{numero}", (int numero) =>
+    {
+        return $"{numero}";
+    });
+
+    app.MapGet("/rangos/{numero}/{nome}", (int numero, string nome) =>
+    {
+        return $"{nome} {numero}";
+    });
+
+    app.MapGet("/rangos", () =>
+    {
+        return "Está funcionando MUITO bem!!!";
+    });
+
+    app.Run();
+    ```
+
+### 1.5.3 Explicação da Sintaxe
+
+#### 1.5.3.1 Parâmetros de Rota
+
+A sintaxe `{parametro}` define um espaço reservado dentro da URL. O ASP.NET Core interpreta o valor recebido e tenta convertê‑lo para o tipo especificado no manipulador.
+
+Exemplo:
+
+    ```csharp
+    app.MapGet("/rangos/{numero}", (int numero) => ... );
+    ```
+
+O valor recebido em `/rangos/10` será convertido automaticamente para `int numero = 10`.
+
+#### 1.5.3.2 Múltiplos Parâmetros
+
+Rotas podem conter mais de um parâmetro, desde que a ordem seja respeitada.
+
+    ```csharp
+    app.MapGet("/rangos/{numero}/{nome}", (int numero, string nome) => ... );
+    ```
+
+Chamada:  
+`/rangos/25/Feijoada`  
+Resultado:  
+`Feijoada 25`
+
+#### 1.5.3.3 Rotas Estáticas vs. Dinâmicas
+
+Rotas estáticas não possuem parâmetros e sempre retornam o mesmo conteúdo.
+
+    ```csharp
+    app.MapGet("/rangos", () => "Está funcionando MUITO bem!!!");
+    ```
+
+Rotas dinâmicas dependem dos valores enviados pelo cliente.
+
+### 1.5.4 Exemplos Práticos
+
+#### 1.5.4.1 Retornando um número enviado na URL
+
+    ```csharp
+    app.MapGet("/numero/{valor}", (int valor) =>
+    {
+        return $"Valor recebido: {valor}";
+    });
+    ```
+
+Chamada:  
+`/numero/42`  
+Resposta:  
+`Valor recebido: 42`
+
+#### 1.5.4.2 Combinando parâmetros numéricos e textuais
+
+    ```csharp
+    app.MapGet("/produto/{id}/{categoria}", (int id, string categoria) =>
+    {
+        return $"Produto {id} da categoria {categoria}";
+    });
+    ```
+
+Chamada:  
+`/produto/7/bebidas`  
+Resposta:  
+`Produto 7 da categoria bebidas`
+
+#### 1.5.4.3 Utilizando parâmetros para consultar o banco
+
+    ```csharp
+    app.MapGet("/rangos/db/{id}", async (int id, RangoDbContext db) =>
+    {
+        var rango = await db.Rangos.FindAsync(id);
+        return rango is null ? Results.NotFound() : Results.Ok(rango);
+    });
+    ```
+
+### 1.5.5 Comparação: Parâmetros de Rota vs. Query String
+
+| Critério | Parâmetros de Rota | Query String |
+| --------- | --------------------- | -------------- |
+| Forma | `/rangos/10` | `/rangos?id=10` |
+| Semântica | Identificação direta do recurso | Filtros e modificadores |
+| Uso ideal | Acesso a um item específico | Paginação, filtros, ordenação |
+
+### 1.5.6 Boas Práticas
+
+* Utilizar parâmetros de rota para identificar recursos únicos.
+* Evitar rotas ambíguas que possam conflitar entre si.
+* Manter nomes de parâmetros claros e consistentes.
+* Preferir tipos primitivos simples para facilitar o *binding*.
+* Validar valores recebidos quando necessário.
+
+### 1.5.7 Conclusão
+
+O uso de parâmetros de rota em Minimal APIs permite criar endpoints expressivos, simples e eficientes. A conversão automática de tipos e a clareza na definição das rotas tornam o desenvolvimento mais direto e menos propenso a erros, especialmente em APIs enxutas e de alta performance.
+
+## 1.6 Conteúdo do BD
+
+### 1.6.1 Introdução
+
+Esta seção apresenta como expor o conteúdo do banco de dados por meio de endpoints em uma Minimal API. O foco está na leitura de dados utilizando Entity Framework Core, retornando tanto coleções quanto registros individuais.
+
+A abordagem utiliza *dependency injection* para disponibilizar o `RangoDbContext` diretamente nos manipuladores das rotas, permitindo consultas simples e eficientes.
+
+### 1.6.2 Configuração Inicial
+
+A aplicação registra o `DbContext` com SQLite e define rotas que retornam dados persistidos no banco. O objetivo é demonstrar como recuperar registros completos ou filtrados por ID.
+
+#### 1.6.2.1 Código de Configuração
+
+    ```csharp
+    using Microsoft.EntityFrameworkCore;
+    using RangoAgil.API.DbContexts;
+
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Services.AddDbContext<RangoDbContext>(
+        o => o.UseSqlite(builder.Configuration["ConnectionStrings:RangoDBConStr"])
+    );
+
+    var app = builder.Build();
+
+    app.MapGet("/", () => "Hello World!");
+
+    app.MapGet("/rango/{id}", (RangoDbContext rangoDbContext, int id) =>
+    {
+        return rangoDbContext.Rangos.FirstOrDefault(x => x.Id == id);
+    });
+
+    app.MapGet("/rangos", (RangoDbContext rangoDbContext) =>
+    {
+        return rangoDbContext.Rangos;
+    });
+
+    app.Run();
+    ```
+
+### 1.6.3 Explicação da Sintaxe
+
+#### 1.6.3.1 Injeção do DbContext
+
+O ASP.NET Core injeta automaticamente o `RangoDbContext` no manipulador da rota:
+
+    ```csharp
+    (RangoDbContext rangoDbContext, int id)
+    ```
+
+Isso permite acessar o banco sem criar instâncias manualmente.
+
+#### 1.6.3.2 Consulta por ID
+
+O método `FirstOrDefault` retorna o primeiro registro que atende ao predicado ou `null` caso não exista.
+
+    ```csharp
+    rangoDbContext.Rangos.FirstOrDefault(x => x.Id == id);
+    ```
+
+#### 1.6.3.3 Retorno de Coleção
+
+Ao retornar `rangoDbContext.Rangos`, o EF Core expõe um `DbSet<Rango>`, que será serializado automaticamente para JSON.
+
+### 1.6.4 Exemplos Práticos
+
+#### 1.6.4.1 Consultando um item específico
+
+    ```csharp
+    app.MapGet("/ingrediente/{id}", async (int id, RangoDbContext db) =>
+    {
+        var ingrediente = await db.Ingredientes.FindAsync(id);
+        return ingrediente is null ? Results.NotFound() : Results.Ok(ingrediente);
+    });
+    ```
+
+Chamada:  
+`/ingrediente/3`  
+Resposta:  
+Objeto JSON contendo o ingrediente de ID 3.
+
+#### 1.6.4.2 Listando todos os itens de uma tabela
+
+    ```csharp
+    app.MapGet("/ingredientes", async (RangoDbContext db) =>
+    {
+        return await db.Ingredientes.ToListAsync();
+    });
+    ```
+
+Chamada:  
+`/ingredientes`  
+Resposta:  
+Lista completa de ingredientes.
+
+#### 1.6.4.3 Incluindo relacionamentos
+
+    ```csharp
+    app.MapGet("/rangos-com-ingredientes", async (RangoDbContext db) =>
+    {
+        return await db.Rangos
+            .Include(r => r.Ingredientes)
+            .ToListAsync();
+    });
+    ```
+
+### 1.6.5 Comparação: `Find`, `FirstOrDefault` e `SingleOrDefault`
+
+| Método | Comportamento | Uso Ideal |
+| -------- | ---------------- | ----------- |
+| `Find` | Busca por chave primária, usa cache | Consultas simples por ID |
+| `FirstOrDefault` | Retorna o primeiro que atende ao predicado | Filtros flexíveis |
+| `SingleOrDefault` | Exige que exista no máximo um registro | Garantia de unicidade |
+
+### 1.6.6 Boas Práticas
+
+* Utilizar `FindAsync` para buscas por chave primária.
+* Retornar `NotFound` quando o registro não existir.
+* Evitar expor `DbSet` diretamente em cenários complexos; preferir `ToListAsync`.
+* Utilizar `Include` apenas quando necessário para evitar sobrecarga.
+* Manter rotas claras e sem ambiguidade.
+
+### 1.6.7 Conclusão
+
+A leitura de dados em Minimal APIs com Entity Framework Core é direta e eficiente. A injeção automática do contexto, combinada com métodos de consulta simples, permite construir endpoints limpos e performáticos, adequados tanto para protótipos quanto para aplicações reais.
+
+## 1.7 Tipos de Parâmetros
+
+### 1.7.1 Introdução
+
+Esta seção apresenta o uso de diferentes tipos de parâmetros em rotas de Minimal APIs, destacando como o ASP.NET Core realiza *route matching* quando múltiplas rotas semelhantes coexistem. O foco está na utilização de *route constraints* para diferenciar rotas que poderiam entrar em conflito, garantindo previsibilidade e segurança no processamento das requisições.
+
+### 1.7.2 Configuração Inicial
+
+A aplicação registra o `RangoDbContext` e define rotas que utilizam parâmetros tipados. O objetivo é demonstrar como o tipo do parâmetro influencia a seleção da rota correta.
+
+#### 1.7.2.1 Código de Configuração
+
+    ```csharp
+    using Microsoft.EntityFrameworkCore;
+    using RangoAgil.API.DbContexts;
+
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Services.AddDbContext<RangoDbContext>(
+        o => o.UseSqlite(builder.Configuration["ConnectionStrings:RangoDBConStr"])
+    );
+
+    var app = builder.Build();
+
+    app.MapGet("/", () => "Hello World!");
+
+    app.MapGet("/rango/{id:int}", (RangoDbContext rangoDbContext, int id) =>
+    {
+        return rangoDbContext.Rangos.FirstOrDefault(x => x.Id == id);
+    });
+
+    app.MapGet("/rango/{nome}", (RangoDbContext rangoDbContext, string nome) =>
+    {
+        return rangoDbContext.Rangos.FirstOrDefault(x => x.Nome == nome);
+    });
+
+    app.MapGet("/rangos", (RangoDbContext rangoDbContext) =>
+    {
+        return rangoDbContext.Rangos;
+    });
+
+    app.Run();
+    ```
+
+### 1.7.3 Explicação da Sintaxe
+
+#### 1.7.3.1 Route Constraints
+
+A expressão `{id:int}` define que o parâmetro só será aceito se puder ser convertido para `int`.  
+Isso evita conflitos com a rota `{nome}`, que aceita qualquer texto.
+
+    ```csharp
+    /rango/10     → corresponde a {id:int}
+    /rango/feijoada → corresponde a {nome}
+    ```
+
+#### 1.7.3.2 Parâmetros Sem Restrição
+
+A rota:
+
+    ```csharp
+    /rango/{nome}
+    ```
+
+aceita qualquer valor que não seja reconhecido como inteiro, permitindo buscas textuais.
+
+#### 1.7.3.3 Ordem de Resolução
+
+O ASP.NET Core tenta casar rotas da mais específica para a mais genérica.  
+A presença de `{id:int}` torna a rota numérica mais específica, evitando ambiguidade.
+
+### 1.7.4 Exemplos Práticos
+
+#### 1.7.4.1 Rota com parâmetro inteiro
+
+    ```csharp
+    app.MapGet("/produto/{codigo:int}", (int codigo) =>
+    {
+        return $"Código recebido: {codigo}";
+    });
+    ```
+
+Chamada:  
+`/produto/55`  
+Resposta:  
+`Código recebido: 55`
+
+#### 1.7.4.2 Rota com parâmetro textual
+
+    ```csharp
+    app.MapGet("/produto/{nome}", (string nome) =>
+    {
+        return $"Produto: {nome}";
+    });
+    ```
+
+Chamada:  
+`/produto/cafe`  
+Resposta:  
+`Produto: cafe`
+
+#### 1.7.4.3 Combinando constraints adicionais
+
+    ```csharp
+    app.MapGet("/pedido/{ano:int:min(2000)}/{mes:int:range(1,12)}", (int ano, int mes) =>
+    {
+        return $"Pedidos de {mes}/{ano}";
+    });
+    ```
+
+Chamada válida:  
+`/pedido/2024/5`
+
+Chamada inválida:  
+`/pedido/1999/13`
+
+### 1.7.5 Comparação: Parâmetros Tipados vs. Não Tipados
+
+| Critério | Tipados (`{id:int}`) | Não Tipados (`{nome}`) |
+| --------- | ------------------------ | -------------------------- |
+| Validação | Automática | Manual |
+| Previsibilidade | Alta | Média |
+| Risco de conflito | Baixo | Alto |
+| Uso ideal | Identificadores numéricos | Nomes, códigos, textos |
+
+### 1.7.6 Boas Práticas
+
+* Utilizar *route constraints* sempre que houver possibilidade de conflito entre rotas.
+* Evitar rotas excessivamente genéricas que possam capturar valores inesperados.
+* Manter nomes de parâmetros coerentes com o tipo esperado.
+* Preferir parâmetros tipados para garantir validação automática.
+* Documentar claramente o comportamento de rotas semelhantes.
+
+### 1.7.7 Conclusão
+
+O uso de tipos de parâmetros e *route constraints* em Minimal APIs permite criar rotas mais seguras, previsíveis e organizadas. A diferenciação entre rotas numéricas e textuais evita ambiguidades e melhora a clareza da API, especialmente em cenários onde múltiplos padrões de URL coexistem.
+
+## 1.8 Parameter Binding
+
+### 1.8.1 Introdução
+
+Esta seção apresenta os diferentes mecanismos de *parameter binding* disponíveis em Minimal APIs. O ASP.NET Core permite extrair valores de diversas origens da requisição — como cabeçalhos, query string e rota — utilizando atributos específicos. Isso torna o código mais explícito, previsível e fácil de manter.
+
+O exemplo demonstra como recuperar parâmetros a partir de *headers*, *query strings* e rotas, além de como combinar esses mecanismos com Entity Framework Core para consultar o banco de dados.
+
+### 1.8.2 Código de Configuração
+
+    ```csharp
+    app.MapGet("/", () => "Hello World!");
+
+    app.MapGet("/rango", (RangoDbContext rangoDbContext, [FromHeader(Name ="RangoId")] int id) =>
+    {
+        return rangoDbContext.Rangos.FirstOrDefault(x => x.Id == id);
+    });
+
+    app.MapGet("/rango/Header", (RangoDbContext rangoDbContext, [FromHeader] int id) =>
+    {
+        return rangoDbContext.Rangos.FirstOrDefault(x => x.Id == id);
+    });
+
+    app.MapGet("/rango/Query", (RangoDbContext rangoDbContext, [FromQuery] int id) =>
+    {
+        return rangoDbContext.Rangos.FirstOrDefault(x => x.Id == id);
+    });
+
+    app.MapGet("/rango/{nome}", (RangoDbContext rangoDbContext, string nome) =>
+    {
+        return rangoDbContext.Rangos.FirstOrDefault(x => x.Nome == nome);
+    });
+
+    app.MapGet("/rangos", (RangoDbContext rangoDbContext) =>
+    {
+        return rangoDbContext.Rangos;
+    });
+
+    app.Run();
+    ```
+
+### 1.8.3 Explicação da Sintaxe
+
+#### 1.8.3.1 `[FromHeader]`
+
+O atributo `[FromHeader]` indica que o valor deve ser extraído do cabeçalho HTTP.
+
+    ```csharp
+    [FromHeader(Name = "RangoId")] int id
+    ```
+
+* `Name` define o nome exato do cabeçalho.
+* Se omitido, o nome do parâmetro é utilizado como chave.
+
+Exemplo de chamada:
+
+    ```
+    GET /rango
+    RangoId: 3
+    ```
+
+#### 1.8.3.2 `[FromQuery]`
+
+O atributo `[FromQuery]` força a leitura do valor a partir da query string.
+
+    ```csharp
+    [FromQuery] int id
+    ```
+
+Chamada:
+
+    ```
+    /rango/Query?id=4
+    ```
+
+#### 1.8.3.3 Parâmetros de Rota
+
+A rota:
+
+    ```csharp
+    /rango/{nome}
+    ```
+
+captura o valor diretamente da URL, sem necessidade de atributos adicionais.
+
+Chamada:
+
+    ```
+    /rango/Rendang
+    ```
+
+### 1.8.4 Exemplos Práticos
+
+#### 1.8.4.1 Recebendo valores de cabeçalho
+
+    ```csharp
+    app.MapGet("/cliente", ([FromHeader(Name = "ClienteId")] int id) =>
+    {
+        return $"Cliente recebido: {id}";
+    });
+    ```
+
+Chamada:
+
+    ```
+    GET /cliente
+    ClienteId: 99
+    ```
+
+#### 1.8.4.2 Recebendo valores de query string
+
+    ```csharp
+    app.MapGet("/busca", ([FromQuery] string termo) =>
+    {
+        return $"Termo buscado: {termo}";
+    });
+    ```
+
+Chamada:
+
+    ```
+    /busca?termo=batata
+    ```
+
+#### 1.8.4.3 Combinando rota e query string
+
+    ```csharp
+    app.MapGet("/produto/{id}", (int id, [FromQuery] bool detalhado) =>
+    {
+        return $"Produto {id}, detalhado: {detalhado}";
+    });
+    ```
+
+Chamada:
+
+    ```
+    /produto/5?detalhado=true
+    ```
+
+### 1.8.5 Comparação entre Origens de Parâmetros
+
+| Origem | Exemplo | Uso Ideal |
+| -------- | --------- | ----------- |
+| Header | `RangoId: 3` | Metadados, autenticação, identificação técnica |
+| Query String | `/rango/Query?id=4` | Filtros, paginação, parâmetros opcionais |
+| Rota | `/rango/Rendang` | Identificação direta do recurso |
+
+### 1.8.6 Boas Práticas
+
+* Utilizar `[FromHeader]` apenas para informações que fazem sentido como metadados.
+* Preferir `[FromQuery]` para filtros e parâmetros opcionais.
+* Utilizar parâmetros de rota para identificar recursos principais.
+* Evitar misturar muitas origens de parâmetros no mesmo endpoint.
+* Documentar claramente quais valores devem ser enviados em cada origem.
+
+### 1.8.7 Conclusão
+
+O *parameter binding* em Minimal APIs é flexível e poderoso, permitindo extrair valores de diferentes partes da requisição de forma clara e tipada. A utilização de atributos como `[FromHeader]` e `[FromQuery]` torna o comportamento explícito e reduz ambiguidades, contribuindo para APIs mais robustas e previsíveis.
+
+## 1.9 Async Await
+
+### 1.9.1 Introdução
+
+Esta seção apresenta o uso de operações assíncronas em Minimal APIs utilizando `async` e `await`. O Entity Framework Core oferece métodos assíncronos para consultas ao banco de dados, permitindo que a aplicação escale melhor sob carga, evitando bloqueios de threads e melhorando a responsividade.
+
+O objetivo é demonstrar como implementar endpoints assíncronos que consultam registros individuais e coleções completas.
+
+### 1.9.2 Código de Configuração
+
+    ```csharp
+    using Microsoft.AspNetCore.Mvc;
+    using Microsoft.EntityFrameworkCore;
+    using RangoAgil.API.DbContexts;
+
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Services.AddDbContext<RangoDbContext>(
+        o => o.UseSqlite(builder.Configuration["ConnectionStrings:RangoDBConStr"])
+    );
+
+    var app = builder.Build();
+
+    app.MapGet("/", () => "Hello World!");
+
+    app.MapGet("/rango", async (RangoDbContext rangoDbContext, [FromQuery] int id) =>
+    {
+        return await rangoDbContext.Rangos.FirstOrDefaultAsync(x => x.Id == id);
+    });
+
+    app.MapGet("/rango/{nome}", async (RangoDbContext rangoDbContext, string nome) =>
+    {
+        return await rangoDbContext.Rangos.FirstOrDefaultAsync(x => x.Nome == nome);
+    });
+
+    app.MapGet("/rangos", async (RangoDbContext rangoDbContext) =>
+    {
+        return await rangoDbContext.Rangos.ToListAsync();
+    });
+
+    app.Run();
+    ```
+
+### 1.9.3 Explicação da Sintaxe
+
+#### 1.9.3.1 Métodos Assíncronos do EF Core
+
+O Entity Framework Core disponibiliza versões assíncronas dos principais métodos de consulta:
+
+* `FirstOrDefaultAsync`
+* `SingleOrDefaultAsync`
+* `FindAsync`
+* `ToListAsync`
+
+Esses métodos retornam `Task<T>`, permitindo o uso de `await`.
+
+#### 1.9.3.2 Uso de `async` e `await`
+
+A assinatura do endpoint deve ser marcada como assíncrona:
+
+    ```csharp
+    async (RangoDbContext db, int id) => { ... }
+    ```
+
+O operador `await` suspende a execução até que a operação seja concluída, liberando a thread para outras requisições.
+
+#### 1.9.3.3 Benefícios do Modelo Assíncrono
+
+* Melhor escalabilidade sob alta carga.
+* Evita bloqueio de threads do servidor.
+* Integração nativa com EF Core e ASP.NET Core.
+
+### 1.9.4 Exemplos Práticos
+
+#### 1.9.4.1 Consultando um registro por ID
+
+    ```csharp
+    app.MapGet("/ingrediente", async (RangoDbContext db, [FromQuery] int id) =>
+    {
+        var ingrediente = await db.Ingredientes.FirstOrDefaultAsync(x => x.Id == id);
+        return ingrediente is null ? Results.NotFound() : Results.Ok(ingrediente);
+    });
+    ```
+
+#### 1.9.4.2 Listando registros com filtro
+
+    ```csharp
+    app.MapGet("/rangos/filtro", async (RangoDbContext db, [FromQuery] string termo) =>
+    {
+        return await db.Rangos
+            .Where(r => r.Nome.Contains(termo))
+            .ToListAsync();
+    });
+    ```
+
+#### 1.9.4.3 Incluindo relacionamentos de forma assíncrona
+
+    ```csharp
+    app.MapGet("/rangos-com-ingredientes", async (RangoDbContext db) =>
+    {
+        return await db.Rangos
+            .Include(r => r.Ingredientes)
+            .ToListAsync();
+    });
+    ```
+
+### 1.9.5 Comparação: Métodos Síncronos vs. Assíncronos
+
+| Critério | Síncrono | Assíncrono |
+| --------- | ---------- | ------------ |
+| Bloqueio de thread | Sim | Não |
+| Escalabilidade | Menor | Maior |
+| Uso ideal | Scripts, testes simples | APIs em produção |
+| Integração com EF Core | Completa | Completa |
+
+### 1.9.6 Boas Práticas
+
+* Utilizar sempre métodos assíncronos em APIs reais.
+* Evitar misturar métodos síncronos e assíncronos no mesmo fluxo.
+* Retornar `NotFound` quando o registro não existir.
+* Utilizar `ToListAsync` antes de retornar coleções.
+* Manter nomes de rotas e parâmetros consistentes.
+
+### 1.9.7 Conclusão
+
+O uso de `async` e `await` em Minimal APIs é essencial para construir aplicações modernas, escaláveis e eficientes. A integração com o Entity Framework Core facilita a implementação de consultas assíncronas, garantindo melhor desempenho e aproveitamento dos recursos do servidor.
+
+## 1.10 HTTP Results
+
+### 1.10.1 Introdução
+
+Esta seção apresenta o uso de *HTTP Results* tipados em Minimal APIs. O ASP.NET Core fornece o namespace `TypedResults`, que permite retornar respostas HTTP fortemente tipadas, aumentando a clareza, previsibilidade e segurança dos endpoints.
+
+O objetivo é demonstrar como retornar diferentes tipos de respostas — como `Ok`, `NoContent`, `NotFound` — utilizando *result types* combinados com `Results<T1, T2>`.
+
+### 1.10.2 Código de Configuração
+
+    ```csharp
+    app.MapGet("/rango/{id:int}", async (RangoDbContext rangoDbContext, int id) =>
+    {
+        return await rangoDbContext.Rangos.FirstOrDefaultAsync(x => x.Id == id);
+    });
+
+    app.MapGet("/rangos",
+        async Task<Results<NoContent, Ok<List<Rango>>>>
+        (RangoDbContext rangoDbContext, [FromQuery(Name = "name")] string? rangoNome) =>
+    {
+        var rangosEntity = await rangoDbContext.Rangos
+                                    .Where(x => x.Nome.Contains(rangoNome!))
+                                    .ToListAsync();
+
+        if (rangosEntity.Count <= 0 || rangosEntity == null)
+            return TypedResults.NoContent();
+
+        return TypedResults.Ok(rangosEntity);
+    });
+    ```
+
+### 1.10.3 Explicação da Sintaxe
+
+#### 1.10.3.1 `Results<T1, T2>`
+
+O tipo `Results<T1, T2>` define explicitamente quais respostas o endpoint pode retornar.  
+No exemplo:
+
+    ```csharp
+    Results<NoContent, Ok<List<Rango>>>
+    ```
+
+O endpoint pode retornar:
+
+* `204 No Content`
+* `200 OK` com uma lista de `Rango`
+
+Isso melhora a documentação automática e auxilia ferramentas como Swagger.
+
+#### 1.10.3.2 `TypedResults.Ok`
+
+Retorna uma resposta HTTP 200 com o corpo especificado.
+
+    ```csharp
+    TypedResults.Ok(rangosEntity);
+    ```
+
+#### 1.10.3.3 `TypedResults.NoContent`
+
+Retorna uma resposta HTTP 204 sem corpo.
+
+    ```csharp
+    TypedResults.NoContent();
+    ```
+
+#### 1.10.3.4 Consulta com Filtro
+
+O uso de:
+
+    ```csharp
+    .Where(x => x.Nome.Contains(rangoNome!))
+    ```
+
+permite filtrar resultados com base no nome enviado via query string.
+
+### 1.10.4 Exemplos Práticos
+
+#### 1.10.4.1 Endpoint com múltiplos resultados possíveis
+
+    ```csharp
+    app.MapGet("/ingredientes",
+        async Task<Results<NotFound, Ok<List<Ingrediente>>>> (RangoDbContext db) =>
+    {
+        var ingredientes = await db.Ingredientes.ToListAsync();
+
+        if (ingredientes.Count == 0)
+            return TypedResults.NotFound();
+
+        return TypedResults.Ok(ingredientes);
+    });
+    ```
+
+#### 1.10.4.2 Retornando `Created` com TypedResults
+
+    ```csharp
+    app.MapPost("/rango",
+        async Task<Created<Rango>> (RangoDbContext db, Rango novoRango) =>
+    {
+        db.Rangos.Add(novoRango);
+        await db.SaveChangesAsync();
+
+        return TypedResults.Created($"/rango/{novoRango.Id}", novoRango);
+    });
+    ```
+
+#### 1.10.4.3 Retornando `BadRequest`
+
+    ```csharp
+    app.MapGet("/buscar",
+        (string? termo) =>
+    {
+        if (string.IsNullOrWhiteSpace(termo))
+            return TypedResults.BadRequest("O parâmetro 'termo' é obrigatório.");
+
+        return TypedResults.Ok($"Termo recebido: {termo}");
+    });
+    ```
+
+### 1.10.5 Comparação: `IResult` vs. `TypedResults`
+
+| Critério | `IResult` | `TypedResults` |
+| --------- | ----------- | ---------------- |
+| Tipagem | Genérica | Fortemente tipada |
+| Documentação automática | Limitada | Detalhada |
+| Previsibilidade | Média | Alta |
+| Uso ideal | Endpoints simples | APIs robustas e documentadas |
+
+### 1.10.6 Boas Práticas
+
+* Utilizar `TypedResults` para endpoints que retornam múltiplos tipos de resposta.
+* Evitar retornar objetos nulos; preferir `NotFound` ou `NoContent`.
+* Manter consistência nos tipos retornados por cada rota.
+* Utilizar `Results<T1, T2>` para clareza e documentação automática.
+* Validar parâmetros antes de consultar o banco.
+
+### 1.10.7 Conclusão
+
+O uso de *HTTP Results* tipados em Minimal APIs melhora a robustez e a clareza da API, permitindo respostas mais explícitas e previsíveis. A combinação de `TypedResults` com `Results<T1, T2>` fornece uma abordagem moderna e segura para lidar com múltiplos cenários de retorno, tornando a API mais confiável e bem estruturada.
+
+## 1.11 Organizando Código
+
+### 1.11.1 Introdução
+
+Esta seção aborda estratégias para organizar o código em Minimal APIs, mantendo clareza, separação de responsabilidades e facilidade de manutenção. À medida que a API cresce, torna‑se essencial estruturar endpoints, regras de negócio e consultas ao banco de dados de forma modular e previsível.
+
+O exemplo apresentado demonstra como aplicar filtros opcionais, retornar resultados tipados e manter o endpoint enxuto e legível.
+
+### 1.11.2 Código do Endpoint Organizado
+
+    ```csharp
+    app.MapGet("/rangos",
+        async Task<Results<NoContent, Ok<List<Rango>>>>
+        (RangoDbContext rangoDbContext, [FromQuery(Name = "name")] string? rangoNome) =>
+        {
+            var rangosEntity = await rangoDbContext.Rangos
+                                    .Where(
+                                        x =>
+                                            rangoNome == null ||
+                                            x.Nome.Contains(rangoNome!)
+                                    )
+                                    .ToListAsync();
+
+            if (rangosEntity.Count <= 0 || rangosEntity == null)
+                return TypedResults.NoContent();
+
+            return TypedResults.Ok(rangosEntity);
+        });
+    ```
+
+### 1.11.3 Explicação da Sintaxe
+
+#### 1.11.3.1 Filtro Opcional
+
+A expressão:
+
+    ```csharp
+    rangoNome == null || x.Nome.Contains(rangoNome!)
+    ```
+
+permite que o endpoint funcione tanto com quanto sem filtro.  
+
+* Se `rangoNome` for `null`, todos os registros são retornados.  
+* Se houver valor, aplica‑se o filtro `Contains`.
+
+### 1.11.5 Conclusão
+
+Organizar o código em Minimal APIs é fundamental para manter a aplicação sustentável à medida que cresce. A separação entre lógica de consulta, validação e retorno, combinada com o uso de métodos auxiliares e extensões, resulta em uma API mais limpa, modular e fácil de evoluir.
+
+## 1.12 AutoMapper e DTOs
+
+### 1.12.1 Introdução
+
+Esta seção apresenta o uso de **AutoMapper** e **DTOs (Data Transfer Objects)** em Minimal APIs. O objetivo é separar as entidades do domínio dos modelos expostos pela API, garantindo segurança, clareza e controle sobre os dados retornados ao cliente.
+
+O AutoMapper automatiza o processo de conversão entre entidades e DTOs, reduzindo código repetitivo e evitando exposição indevida de propriedades internas.
+
+### 1.12.2 Configuração Inicial
+
+A aplicação registra o `DbContext`, adiciona o AutoMapper e define endpoints que retornam DTOs mapeados a partir das entidades.
+
+#### 1.12.2.1 Código de Configuração
+
+    ```csharp
+    using System.Net;
+    using System.Text.Json.Serialization;
+    using AutoMapper;
+    using Microsoft.AspNetCore.Http.HttpResults;
+    using Microsoft.AspNetCore.Mvc;
+    using Microsoft.EntityFrameworkCore;
+    using RangoAgil.API.DbContexts;
+    using RangoAgil.API.Entities;
+    using RangoAgil.API.Models;
+
+    var builder = WebApplication.CreateBuilder(args);
+
+    builder.Services.AddDbContext<RangoDbContext>(
+        o => o.UseSqlite(builder.Configuration["ConnectionStrings:RangoDBConStr"])
+    );
+
+    builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
+
+    var app = builder.Build();
+
+    app.MapGet("/", () => "Hello World!");
+
+    app.MapGet("/rangos",
+        async Task<Results<NoContent, Ok<List<Rango>>>>
+        (RangoDbContext rangoDbContext, [FromQuery(Name = "name")] string? rangoNome) =>
+        {
+            var rangosEntity = await rangoDbContext.Rangos
+                                    .Where(
+                                        x =>
+                                            rangoNome == null ||
+                                            x.Nome.ToLower().Contains(rangoNome.ToLower())
+                                    )
+                                    .ToListAsync();
+
+            if (rangosEntity.Count <= 0 || rangosEntity == null)
+                return TypedResults.NoContent();
+
+            return TypedResults.Ok(rangosEntity);
+        });
+
+    app.MapGet("/rango/{id:int}", async (
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        int id) =>
+    {
+        return mapper.Map<RangoDTO>(
+            await rangoDbContext.Rangos.FirstOrDefaultAsync(x => x.Id == id)
+        );
+    });
+
+    app.MapGet("/rango/{rangoId:int}/ingredientes", async (
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        int rangoId) =>
+    {
+        return mapper.Map<IEnumerable<IngredienteDTO>>(
+            (await rangoDbContext.Rangos
+                .Include(r => r.Ingredientes)
+                .FirstOrDefaultAsync(r => r.Id == rangoId))?.Ingredientes
+        );
+    });
+
+    app.Run();
+    ```
+
+### 1.12.3 Perfis de Mapeamento
+
+O AutoMapper utiliza perfis para definir como entidades são convertidas em DTOs.
+
+#### 1.12.3.1 Código do Profile
+
+    ```csharp
+    using AutoMapper;
+    using RangoAgil.API.Entities;
+    using RangoAgil.API.Models;
+
+    namespace RangoAgil.API.Profiles;
+
+    public class RangoAgilProfile : Profile
+    {
+        public RangoAgilProfile()
+        {
+            CreateMap<Rango, RangoDTO>().ReverseMap();
+
+            CreateMap<Ingrediente, IngredienteDTO>()
+                .ForMember(
+                    d => d.RangoId,
+                    o => o.MapFrom(s => s.Rangos.First().Id)
+                );
+        }
+    }
+    ```
+
+### 1.12.4 DTOs Utilizados
+
+#### 1.12.4.1 RangoDTO
+
+    ```csharp
+    namespace RangoAgil.API.Models;
+
+    public class RangoDTO
+    {
+        public int Id { get; set; }
+        public required string Nome { get; set; }
+    }
+    ```
+
+#### 1.12.4.2 IngredienteDTO
+
+    ```csharp
+    namespace RangoAgil.API.Models;
+
+    public class IngredienteDTO
+    {
+        public int Id { get; set; }
+        public required string Nome { get; set; }
+        public int RangoId { get; set; }
+    }
+    ```
+
+### 1.12.5 Explicação da Sintaxe
+
+#### 1.12.5.1 `CreateMap<TSource, TDestination>()`
+
+Define o mapeamento entre entidade e DTO.  
+O uso de `.ReverseMap()` permite converter nos dois sentidos.
+
+#### 1.12.5.2 `ForMember`
+
+Permite personalizar o mapeamento de propriedades específicas.
+
+    ```csharp
+    .ForMember(
+        d => d.RangoId,
+        o => o.MapFrom(s => s.Rangos.First().Id)
+    )
+    ```
+
+Essa configuração extrai o primeiro `Rango` associado ao ingrediente e usa seu ID no DTO.
+
+#### 1.12.5.3 Injeção de `IMapper`
+
+O AutoMapper é injetado diretamente no endpoint:
+
+    ```csharp
+    (RangoDbContext db, IMapper mapper, int id)
+    ```
+
+### 1.12.6 Exemplos Práticos
+
+#### 1.12.6.1 Retornando um DTO de Rango
+
+    ```csharp
+    app.MapGet("/rango-dto/{id:int}", async (RangoDbContext db, IMapper mapper, int id) =>
+    {
+        var entity = await db.Rangos.FindAsync(id);
+        return entity is null ? Results.NotFound() : Results.Ok(mapper.Map<RangoDTO>(entity));
+    });
+    ```
+
+#### 1.12.6.2 Retornando Ingredientes com DTOs
+
+    ```csharp
+    app.MapGet("/ingredientes-dto", async (RangoDbContext db, IMapper mapper) =>
+    {
+        var ingredientes = await db.Ingredientes.Include(i => i.Rangos).ToListAsync();
+        return mapper.Map<IEnumerable<IngredienteDTO>>(ingredientes);
+    });
+    ```
+
+### 1.12.7 Comparação: Entidades vs. DTOs
+
+| Critério | Entidades | DTOs |
+| --------- | ----------- | ------ |
+| Exposição de dados | Completa | Controlada |
+| Acoplamento | Alto | Baixo |
+| Segurança | Menor | Maior |
+| Uso ideal | Persistência | Comunicação com o cliente |
+
+### 1.12.8 Boas Práticas
+
+* Nunca expor entidades diretamente em APIs públicas.
+* Utilizar DTOs para controlar exatamente o que é retornado.
+* Centralizar mapeamentos em perfis AutoMapper.
+* Evitar lógica complexa dentro de DTOs.
+* Validar dados antes de mapear para entidades.
+
+### 1.12.9 Conclusão
+
+O uso de AutoMapper e DTOs em Minimal APIs melhora a organização, segurança e clareza da aplicação. A separação entre entidades e modelos de transferência evita exposição indevida de dados e facilita a evolução da API, mantendo o código limpo e sustentável.
