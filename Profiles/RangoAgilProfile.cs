@@ -9,6 +9,8 @@ public class RangoAgilProfile: Profile
     public RangoAgilProfile()
     {
         CreateMap<Rango, RangoDTO>().ReverseMap();
+        CreateMap<Rango, RangoForCreationDTO>().ReverseMap();
+        CreateMap<Rango, RangoForUpdateDTO>().ReverseMap();
 
         CreateMap<Ingrediente, IngredienteDTO>()
             .ForMember(
