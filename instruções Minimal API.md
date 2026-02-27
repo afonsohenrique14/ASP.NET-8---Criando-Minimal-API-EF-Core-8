@@ -2511,3 +2511,673 @@ O agrupamento de endpoints é uma técnica essencial para manter Minimal APIs or
 
 # 4 Estrutura da Minimal API
 
+## 4.1 Endpoint Handlers
+
+### 4.1.1 Introdução
+À medida que a Minimal API cresce, manter toda a lógica diretamente no `Program.cs` torna-se difícil de organizar, testar e evoluir. Para resolver isso, introduzimos **Endpoint Handlers**, classes estáticas que encapsulam a lógica de cada endpoint. Essa abordagem melhora a legibilidade, separa responsabilidades e deixa o arquivo principal responsável apenas pelo mapeamento das rotas.
+
+---
+
+### 4.1.2 Estrutura Geral dos Handlers
+Os handlers são organizados em classes estáticas dentro de um namespace dedicado, como:
+
+```
+RangoAgil.API.EndpointHandlers
+```
+
+Cada classe representa um conjunto de operações relacionadas a um recurso específico:
+
+- `RangosHandlers` — operações sobre Rangos  
+- `IngredientesHandlers` — operações sobre Ingredientes  
+
+Essa separação segue o padrão REST já estabelecido na API.
+
+---
+
+### 4.1.3 Handler de Ingredientes
+
+```csharp
+public static class IngredientesHandlers
+{
+    public static async Task<Results<NoContent, Ok<IEnumerable<IngredienteDTO>>>> 
+        GetIngredientesAsyn(
+            RangoDbContext rangoDbContext,
+            IMapper mapper,
+            int rangoId)
+    {
+        var EntityIngredientes = await rangoDbContext.Rangos
+            .Include(r => r.Ingredientes)
+            .FirstOrDefaultAsync(r => r.Id == rangoId);
+
+        return EntityIngredientes is null
+            ? TypedResults.NoContent()
+            : TypedResults.Ok(
+                mapper.Map<IEnumerable<IngredienteDTO>>(EntityIngredientes.Ingredientes)
+            );
+    }
+}
+```
+
+#### 4.1.3.1 Explicação
+- O método recebe apenas o necessário: `DbContext`, `IMapper` e o ID.
+- A consulta inclui os ingredientes via `Include`.
+- O retorno é tipado (`NoContent` ou `Ok`).
+- O mapeamento ocorre apenas no retorno.
+
+---
+
+### 4.1.4 Handlers de Rangos
+
+#### 4.1.4.1 GET – Listar Rangos com Filtro Opcional
+
+```csharp
+public static async Task<Results<NoContent, Ok<IEnumerable<RangoDTO>>>> 
+    GetRangosAsync(
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        [FromQuery(Name ="name")] string? rangoNome)
+{
+    var rangosEntity = await rangoDbContext.Rangos
+        .Where(x =>
+            rangoNome == null ||
+            x.Nome.ToLower().Contains(rangoNome.ToLower()))
+        .ToListAsync();
+
+    if (rangosEntity.Count <= 0 || rangosEntity == null)
+        return TypedResults.NoContent();
+
+    return TypedResults.Ok(mapper.Map<IEnumerable<RangoDTO>>(rangosEntity));
+}
+```
+
+#### 4.1.4.2 GET – Buscar Rango por ID
+
+```csharp
+public static async Task<Results<NotFound, Ok<RangoDTO>>> 
+    GetRangoByIdAsync(
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        int rangoId)
+{
+    var EntityRango = await rangoDbContext.Rangos
+        .FirstOrDefaultAsync(x => x.Id == rangoId);
+
+    return EntityRango is null
+        ? TypedResults.NotFound()
+        : TypedResults.Ok(mapper.Map<RangoDTO>(EntityRango));
+}
+```
+
+#### 4.1.4.3 POST – Criar Novo Rango
+
+```csharp
+public static async Task<CreatedAtRoute<RangoDTO>> 
+    RangoPostAsync(
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        RangoForCreationDTO rangoForCreation)
+{
+    var rangosEntity = mapper.Map<Rango>(rangoForCreation);
+
+    rangoDbContext.Add(rangosEntity);
+    await rangoDbContext.SaveChangesAsync();
+
+    var rangoToReturn = mapper.Map<RangoDTO>(rangosEntity);
+
+    return TypedResults.CreatedAtRoute(
+        rangoToReturn,
+        "GetRangos",
+        new { rangoId = rangoToReturn.Id }
+    );
+}
+```
+
+#### 4.1.4.4 PUT – Atualizar Rango
+
+```csharp
+public static async Task<Results<NotFound, Ok<RangoDTO>>> 
+    RangoPutAsync(
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        RangoForUpdateDTO rangoForUpdate,
+        int rangoId)
+{
+    var EntityRango = await rangoDbContext.Rangos
+        .FirstOrDefaultAsync(x => x.Id == rangoId);
+
+    if (EntityRango == null)
+        return TypedResults.NotFound();
+
+    mapper.Map(rangoForUpdate, EntityRango);
+
+    await rangoDbContext.SaveChangesAsync();
+
+    var rangoToReturn = mapper.Map<RangoDTO>(EntityRango);
+
+    return TypedResults.Ok(rangoToReturn);
+}
+```
+
+#### 4.1.4.5 DELETE – Remover Rango
+
+```csharp
+public static async Task<Results<NotFound, Ok>> 
+    RangoDeleteAsync(
+        RangoDbContext rangoDbContext,
+        int rangoId)
+{
+    var EntityRango = await rangoDbContext.Rangos
+        .FirstOrDefaultAsync(x => x.Id == rangoId);
+
+    if (EntityRango == null)
+        return TypedResults.NotFound();
+
+    rangoDbContext.Rangos.Remove(EntityRango);
+
+    await rangoDbContext.SaveChangesAsync();
+
+    return TypedResults.Ok();
+}
+```
+
+---
+
+### 4.1.5 Comparação entre Lógica Inline e Handlers
+
+| Critério | Inline no Program.cs | Endpoint Handlers |
+|---------|------------------------|--------------------|
+| Organização | Baixa | Alta |
+| Testabilidade | Difícil | Fácil |
+| Reutilização | Limitada | Alta |
+| Escalabilidade | Ruim | Excelente |
+| Separação de responsabilidades | Fraca | Clara |
+
+---
+
+### 4.1.6 Boas Práticas
+- Criar um handler por recurso.
+- Manter métodos pequenos e focados.
+- Utilizar retornos tipados (`Results<T1, T2>`).
+- Evitar lógica de negócio dentro do `Program.cs`.
+- Centralizar mapeamentos no AutoMapper.
+
+---
+
+### 4.1.7 Conclusão
+A adoção de Endpoint Handlers transforma a Minimal API em uma arquitetura mais limpa, modular e sustentável. A lógica de cada operação fica isolada, facilitando testes, manutenção e evolução da aplicação. Essa abordagem se integra perfeitamente com o agrupamento de endpoints e com o uso de DTOs e AutoMapper, consolidando uma API profissional e bem estruturada.
+
+---
+## 4.2 Métodos de Extensão
+
+### 4.2.1 Introdução
+Com o crescimento da Minimal API, mesmo utilizando **Endpoint Handlers** e **grupos de rotas**, o arquivo `Program.cs` ainda pode acumular muitos mapeamentos. Para manter a organização e a escalabilidade, introduzimos **métodos de extensão** para registrar endpoints.
+
+Essa abordagem permite que cada conjunto de endpoints seja encapsulado em métodos reutilizáveis, deixando o `Program.cs` limpo e focado apenas na configuração da aplicação.
+
+---
+
+### 4.2.2 Estrutura dos Métodos de Extensão
+Os métodos de extensão são definidos em uma classe estática dentro de um namespace específico, como:
+
+```
+RangoAgil.API.Extensions
+```
+
+Cada método agrupa o registro de endpoints relacionados a um recurso, como:
+
+- `RegisterRangosEndpoints`
+- `RegisterIngredientesEndpoints`
+
+Isso mantém a API modular e facilita a manutenção.
+
+---
+
+### 4.2.3 Implementação dos Métodos de Extensão
+
+#### 4.2.3.1 Registro dos Endpoints de Rangos
+
+```csharp
+public static class EndpointRouteBuilderExtensions
+{
+    public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
+    {
+        var rangosEndpoints = app.MapGroup("/rangos");
+        var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+
+        rangosEndpoints.MapGet("", RangosHandlers.GetRangosAsync);
+
+        rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+                            .WithName("GetRangos");
+
+        rangosEndpoints.MapPost("", RangosHandlers.RangoPostAsync);
+
+        rangosComIDEndpoints.MapPut("", RangosHandlers.RangoPutAsync);
+
+        rangosComIDEndpoints.MapDelete("", RangosHandlers.RangoDeleteAsync);
+    }
+```
+
+#### 4.2.3.2 Registro dos Endpoints de Ingredientes
+
+```csharp
+    public static void RegisterIngredientesEndpoints(this IEndpointRouteBuilder app)
+    {
+        var ingredientesEndpoints = app.MapGroup("rangos/{rangoId:int}/ingredientes");
+
+        ingredientesEndpoints.MapGet("", IngredientesHandlers.GetIngredientesAsyn);
+    }
+}
+```
+
+#### 4.2.3.3 Explicação
+- Cada método de extensão recebe `this IEndpointRouteBuilder app`, permitindo ser chamado diretamente sobre `app`.
+- Os grupos de rotas são criados dentro do método, mantendo o padrão REST.
+- Os handlers são referenciados diretamente, eliminando lógica duplicada.
+- A rota nomeada `"GetRangos"` continua funcionando para `CreatedAtRoute`.
+
+---
+
+### 4.2.4 Uso dos Métodos de Extensão no Program.cs
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddDbContext<RangoDbContext>(
+    o => o.UseSqlite(builder.Configuration["ConnectionStrings:RangoDBConStr"])
+);
+
+builder.Services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.RegisterRangosEndpoints();
+app.RegisterIngredientesEndpoints();
+
+app.Run();
+```
+
+#### 4.2.4.1 Explicação
+- O `Program.cs` agora contém apenas chamadas de registro.
+- A API fica mais limpa, modular e fácil de navegar.
+- A ordem de registro é clara e explícita.
+
+---
+
+### 4.2.5 Comparação: Program.cs sem Extensões vs. com Extensões
+
+| Critério | Sem Extensões | Com Extensões |
+|---------|----------------|----------------|
+| Organização | Baixa | Alta |
+| Tamanho do Program.cs | Grande | Pequeno |
+| Reutilização | Limitada | Alta |
+| Testabilidade | Média | Alta |
+| Escalabilidade | Difícil | Excelente |
+
+---
+
+### 4.2.6 Boas Práticas
+- Criar um método de extensão por recurso principal.
+- Manter nomes claros e consistentes (`RegisterXEndpoints`).
+- Evitar lógica dentro dos métodos; apenas mapeamento.
+- Utilizar grupos de rotas dentro dos métodos para manter o padrão REST.
+- Registrar os métodos no `Program.cs` em ordem lógica.
+
+---
+
+### 4.2.7 Conclusão
+Os métodos de extensão elevam a organização da Minimal API a um novo nível. Eles permitem que o `Program.cs` permaneça limpo e focado, enquanto toda a estrutura de rotas fica encapsulada em módulos reutilizáveis. Combinados com Endpoint Handlers e grupos de rotas, formam uma arquitetura robusta, escalável e profissional.
+
+---
+
+# 5 Manipulaçã de Exceçõoes de Logs
+
+## 5.1 Tratando Exceção no Middleware: Minimal API
+
+### 5.1.1 Introdução
+O tratamento centralizado de exceções em aplicações Minimal API permite capturar falhas inesperadas e retornar respostas consistentes ao cliente. Em ambientes de produção, é essencial evitar a exposição de detalhes internos da aplicação, fornecendo mensagens controladas e códigos de status adequados.
+
+### 5.1.2 Objetivo do Middleware de Exceção
+O middleware de exceção tem como finalidade:
+- Interceptar erros não tratados.
+- Registrar falhas para diagnóstico.
+- Retornar respostas padronizadas.
+- Evitar vazamento de informações sensíveis.
+
+### 5.1.3 Estrutura do Middleware no Ambiente de Produção
+A configuração condicional baseada no ambiente garante que mensagens detalhadas só sejam exibidas em desenvolvimento. Em produção, a aplicação deve retornar apenas informações genéricas.
+
+```csharp
+if (app.Environment.IsProduction())
+{
+    app.UseExceptionHandler(configureApplicationBuilder =>
+    {
+        configureApplicationBuilder.Run(async context =>
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+            context.Response.ContentType = "text/html";
+            await context.Response.WriteAsync("An unexpected problem happened.");
+        });
+    });
+}
+```
+
+### 5.1.4 Explicação da Sintaxe
+- `app.Environment.IsProduction()`  
+  Verifica se o ambiente atual é Produção.
+- `app.UseExceptionHandler(...)`  
+  Registra um middleware que captura exceções não tratadas.
+- `configureApplicationBuilder.Run(...)`  
+  Define o pipeline final para lidar com a exceção capturada.
+- `context.Response.StatusCode`  
+  Define o código HTTP retornado ao cliente.
+- `context.Response.ContentType`  
+  Define o tipo de conteúdo da resposta.
+- `context.Response.WriteAsync(...)`  
+  Envia a mensagem ao cliente.
+
+### 5.1.5 Exemplo Prático com Registro de Logs
+Um cenário comum envolve registrar a exceção antes de retornar a resposta.
+
+```csharp
+if (app.Environment.IsProduction())
+{
+    app.UseExceptionHandler(errorApp =>
+    {
+        errorApp.Run(async context =>
+        {
+            var logger = context.RequestServices.GetRequiredService<ILoggerFactory>()
+                                               .CreateLogger("GlobalException");
+
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/json";
+
+            logger.LogError("Erro inesperado no processamento da requisição.");
+
+            await context.Response.WriteAsync("{\"message\": \"Erro interno no servidor.\"}");
+        });
+    });
+}
+```
+
+### 5.1.6 Comparação: Desenvolvimento vs Produção
+
+| Ambiente | Comportamento | Exposição de Detalhes | Objetivo |
+|---------|----------------|------------------------|----------|
+| Desenvolvimento | Exibe página detalhada de erro | Alta | Facilitar depuração |
+| Produção | Retorna mensagem genérica | Baixa | Segurança e estabilidade |
+
+### 5.1.7 Boas Práticas
+- Registrar exceções com informações suficientes para diagnóstico.
+- Nunca retornar stack trace ao cliente em produção.
+- Utilizar formatos consistentes de resposta (JSON, XML, texto).
+- Integrar com ferramentas de observabilidade (Application Insights, Elastic Stack).
+- Criar middlewares personalizados quando necessário.
+
+### 5.1.8 Exemplo de Middleware Personalizado
+Um middleware customizado pode padronizar respostas e integrar logs de forma mais completa.
+
+```csharp
+public class GlobalExceptionMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<GlobalExceptionMiddleware> _logger;
+
+    public GlobalExceptionMiddleware(RequestDelegate next, ILogger<GlobalExceptionMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Erro não tratado.");
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            context.Response.ContentType = "application/json";
+
+            await context.Response.WriteAsync("{\"message\": \"Erro interno no servidor.\"}");
+        }
+    }
+}
+```
+
+Registro no pipeline:
+
+```csharp
+app.UseMiddleware<GlobalExceptionMiddleware>();
+```
+
+### 5.1.9 Conclusão
+O tratamento de exceções em Minimal API é fundamental para garantir robustez, segurança e previsibilidade. A configuração adequada do middleware permite respostas consistentes e evita exposição de detalhes sensíveis, especialmente em produção.
+
+---
+
+## 5.2 Add Problem Details em Minimal API
+
+### 5.2.1 Introdução
+O uso de *Problem Details* em Minimal API padroniza respostas de erro conforme a RFC 7807, permitindo que clientes recebam informações estruturadas sobre falhas ocorridas durante o processamento da requisição. Essa abordagem melhora a interoperabilidade, facilita diagnósticos e mantém consistência entre diferentes endpoints.
+
+### 5.2.2 Registro do Serviço de Problem Details
+A configuração inicia com o registro do serviço responsável por gerar automaticamente objetos `ProblemDetails` quando exceções ou erros de validação ocorrem.
+
+```csharp
+builder.Services.AddProblemDetails();
+var app = builder.Build();
+```
+
+Esse registro habilita o pipeline para produzir respostas no formato JSON contendo:
+- `type`
+- `title`
+- `status`
+- `detail`
+- `instance`
+
+### 5.2.3 Integração com o Middleware de Exceção
+Em ambientes de produção, o middleware de exceção pode ser simplificado quando `AddProblemDetails` está habilitado. O método `UseExceptionHandler()` passa a gerar automaticamente uma resposta estruturada.
+
+```csharp
+if (app.Environment.IsProduction())
+{
+    app.UseExceptionHandler();
+}
+```
+
+Essa configuração substitui a necessidade de um manipulador manual, como no exemplo comentado:
+
+```csharp
+// app.UseExceptionHandler(configureApplicatioonBuilder =>
+// {
+//     configureApplicatioonBuilder.Run(async context =>
+//     {
+//         context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+//         context.Response.ContentType = "text/html";
+//         await context.Response.WriteAsync("An unexpected problem happened.");
+//     });
+// });
+```
+
+### 5.2.4 Explicação da Sintaxe
+- `builder.Services.AddProblemDetails()`  
+  Registra o serviço responsável por gerar respostas no padrão RFC 7807.
+- `app.UseExceptionHandler()`  
+  Ativa o middleware que captura exceções e delega ao serviço de Problem Details a criação da resposta.
+- `app.Environment.IsProduction()`  
+  Garante que o tratamento genérico seja aplicado apenas em produção.
+
+### 5.2.5 Exemplo Prático de Erro Gerado Automaticamente
+Quando ocorre uma exceção não tratada, a resposta gerada segue o padrão:
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc7231#section-6.6.1",
+  "title": "An error occurred while processing your request.",
+  "status": 500,
+  "traceId": "00-abc123..."
+}
+```
+
+Essa resposta é produzida sem necessidade de código adicional no middleware.
+
+### 5.2.6 Comparação: Middleware Manual vs Problem Details
+
+| Abordagem | Vantagens | Desvantagens |
+|----------|-----------|--------------|
+| Middleware manual | Total controle sobre a resposta | Maior código, risco de inconsistência |
+| Problem Details | Padronização, menor código, compatível com RFC 7807 | Menor personalização sem extensões adicionais |
+
+### 5.2.7 Boas Práticas
+- Utilizar Problem Details como padrão para erros em APIs REST.
+- Evitar mensagens genéricas quando for seguro fornecer detalhes adicionais.
+- Manter consistência entre erros de validação e erros de exceção.
+- Integrar logs estruturados para complementar o diagnóstico.
+
+### 5.2.8 Exemplo Avançado com Personalização
+É possível personalizar o comportamento de Problem Details:
+
+```csharp
+builder.Services.AddProblemDetails(options =>
+{
+    options.CustomizeProblemDetails = context =>
+    {
+        context.ProblemDetails.Extensions["requestId"] = context.HttpContext.TraceIdentifier;
+        context.ProblemDetails.Extensions["timestamp"] = DateTime.UtcNow;
+    };
+});
+```
+
+Essa abordagem adiciona metadados úteis para rastreamento e auditoria.
+
+### 5.2.9 Conclusão
+A integração de `AddProblemDetails` com `UseExceptionHandler` simplifica o tratamento de erros em Minimal API, reduz código repetitivo e garante respostas padronizadas. Essa prática melhora a experiência do cliente e facilita a manutenção da aplicação.
+
+---
+## 5.3 Logs de Aplicação em Minimal API
+
+### 5.3.1 Introdução
+O uso de logs em Minimal API é fundamental para monitorar o comportamento da aplicação, diagnosticar falhas, registrar eventos relevantes e acompanhar o fluxo de execução. A injeção de `ILogger<T>` permite registrar informações estruturadas e integradas ao provedor de logs configurado (Console, Debug, Application Insights, Elastic Stack, entre outros).
+
+### 5.3.2 Objetivo do Log no Endpoint
+O método apresentado utiliza logs para:
+- Registrar buscas realizadas no banco de dados.
+- Informar quando nenhum resultado é encontrado.
+- Registrar o retorno bem-sucedido da operação.
+- Facilitar auditoria e rastreamento de requisições.
+
+### 5.3.3 Código do Endpoint com Logging
+
+```csharp
+public static async Task<Results<NoContent, Ok<IEnumerable<RangoDTO>>>> GetRangosAsync
+(
+    RangoDbContext rangoDbContext,
+    IMapper mapper,
+    ILogger<RangoDTO> logger,
+    [FromQuery(Name = "name")] string? rangoNome
+)
+{
+    var rangosEntity = await rangoDbContext.Rangos
+                                .Where(x =>
+                                    rangoNome == null ||
+                                    x.Nome.ToLower().Contains(rangoNome.ToLower())
+                                )
+                                .ToListAsync();
+
+    if (rangosEntity.Count <= 0 || rangosEntity == null)
+    {
+        logger.LogInformation($"Rango não encontrado. Parâmetro: {rangoNome}");
+        return TypedResults.NoContent();
+    }
+
+    logger.LogInformation("Retornando o Rango encontrado");
+    return TypedResults.Ok(mapper.Map<IEnumerable<RangoDTO>>(rangosEntity));
+}
+```
+
+### 5.3.4 Explicação da Sintaxe
+- `ILogger<RangoDTO>`  
+  Injeta um logger tipado, permitindo categorizar logs por classe.
+- `logger.LogInformation(...)`  
+  Registra mensagens informativas no pipeline de logs.
+- `Results<NoContent, Ok<IEnumerable<RangoDTO>>>`  
+  Define respostas possíveis do endpoint, permitindo retorno tipado.
+- `rangoNome == null || x.Nome.ToLower().Contains(...)`  
+  Realiza filtro condicional baseado no parâmetro de consulta.
+- `TypedResults.NoContent()`  
+  Retorna HTTP 204 quando nenhum registro é encontrado.
+
+### 5.3.5 Boas Práticas de Logging
+- Registrar apenas informações relevantes ao diagnóstico.
+- Evitar logs excessivos em loops ou operações de alta frequência.
+- Utilizar níveis adequados: `Information`, `Warning`, `Error`, `Critical`.
+- Incluir parâmetros relevantes para rastreamento.
+- Integrar logs com correlação de requisições (`TraceIdentifier`).
+
+### 5.3.6 Exemplo Prático com Níveis de Log
+A seguir, um exemplo com logs mais detalhados:
+
+```csharp
+public static async Task<Results<NoContent, Ok<IEnumerable<RangoDTO>>>> GetRangosAsync
+(
+    RangoDbContext rangoDbContext,
+    IMapper mapper,
+    ILogger<RangoDTO> logger,
+    [FromQuery(Name = "name")] string? rangoNome
+)
+{
+    logger.LogInformation("Iniciando busca de rangos. Parâmetro recebido: {nome}", rangoNome);
+
+    var rangosEntity = await rangoDbContext.Rangos
+                                .Where(x =>
+                                    rangoNome == null ||
+                                    x.Nome.ToLower().Contains(rangoNome.ToLower())
+                                )
+                                .ToListAsync();
+
+    if (rangosEntity == null || rangosEntity.Count == 0)
+    {
+        logger.LogWarning("Nenhum rango encontrado para o parâmetro: {nome}", rangoNome);
+        return TypedResults.NoContent();
+    }
+
+    logger.LogInformation("Quantidade de rangos encontrados: {quantidade}", rangosEntity.Count);
+
+    var resultado = mapper.Map<IEnumerable<RangoDTO>>(rangosEntity);
+    logger.LogInformation("Retornando resultado mapeado para DTO");
+
+    return TypedResults.Ok(resultado);
+}
+```
+
+### 5.3.7 Comparação: Log Simples vs Log Estruturado
+
+| Tipo de Log | Características | Vantagens |
+|-------------|-----------------|-----------|
+| Texto simples | Mensagens fixas | Fácil leitura, porém pouco estruturado |
+| Log estruturado | Uso de placeholders `{valor}` | Melhor análise em ferramentas de observabilidade |
+
+### 5.3.8 Integração com Observabilidade
+A utilização de logs estruturados facilita integração com:
+- Application Insights  
+- Elastic Stack (ELK)  
+- Seq  
+- Grafana Loki  
+
+Essas ferramentas permitem consultas avançadas, dashboards e alertas.
+
+### 5.3.9 Conclusão
+O uso adequado de logs em Minimal API melhora a rastreabilidade, facilita a manutenção e permite identificar problemas rapidamente. A combinação de logs estruturados, níveis adequados e integração com ferramentas de observabilidade fortalece a confiabilidade da aplicação.
+
+---

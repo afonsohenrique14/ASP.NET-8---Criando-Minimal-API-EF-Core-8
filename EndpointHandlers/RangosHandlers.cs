@@ -15,7 +15,9 @@ public static class RangosHandlers
     (
         RangoDbContext rangoDbContext, 
         IMapper mapper,
-        [FromQuery(Name ="name")]string? rangoNome)
+        ILogger<RangoDTO> logger,
+        [FromQuery(Name ="name")]string? rangoNome
+    )
     {
         var rangosEntity = await rangoDbContext.Rangos
                                     .Where(
@@ -26,8 +28,12 @@ public static class RangosHandlers
                                     .ToListAsync();
 
         if(rangosEntity.Count <= 0 || rangosEntity == null)
+        {
+            logger.LogInformation($"Rango não encontrado. Parâmetro: {rangoNome}");
             return TypedResults.NoContent();
+        }
 
+        logger.LogInformation("Retornando o Rango encontrado");
         return TypedResults.Ok(mapper.Map<IEnumerable<RangoDTO>>(rangosEntity));
         
     }
