@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <Folder Include="DbContexts\" />
+    <Folder Include="EndpointHandlers\" />
     <Folder Include="Entities\" />
     <Folder Include="Profiles\" />
   </ItemGroup>

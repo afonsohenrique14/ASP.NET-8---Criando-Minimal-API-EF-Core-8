@@ -2320,3 +2320,194 @@ app.MapDelete("/rangos/{rangoId:int}", async Task<Results<NotFound, Ok>>
 
 ### 3.5.6 Conclusão
 A padronização de URLs é essencial para manter uma API clara, intuitiva e alinhada às práticas REST. O conjunto de endpoints apresentado demonstra uma estrutura consistente, facilitando manutenção, documentação e evolução da aplicação. Essa abordagem melhora a experiência de desenvolvedores e consumidores da API, garantindo previsibilidade e organização.
+
+## 3.6 Groupping Endpoints
+
+### 3.6.1 Introdução
+Esta seção apresenta a organização de endpoints por meio de **grupos de rotas** (*route groups*) em Minimal APIs. O objetivo é estruturar a API de forma modular, clara e escalável, agrupando endpoints relacionados sob um mesmo prefixo. Essa abordagem reduz repetição de código, melhora a legibilidade e facilita a aplicação de configurações compartilhadas, como versionamento, autorização e filtros.
+
+A estrutura utilizada cria três níveis de agrupamento:
+
+- `/rangos` — grupo principal do recurso.
+- `/rangos/{rangoId:int}` — grupo de operações sobre um recurso específico.
+- `/rangos/{rangoId:int}/ingredientes` — sub-recurso relacionado.
+
+### 3.6.2 Estrutura dos Grupos de Endpoints
+
+```csharp
+var rangosEndpoints = app.MapGroup("/rangos");
+var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+var ingredientesEndpoints = rangosComIDEndpoints.MapGroup("/ingredientes");
+```
+
+Essa estrutura cria uma hierarquia clara e evita repetição de prefixos em cada endpoint.
+
+### 3.6.3 Endpoints do Grupo Principal `/rangos`
+
+#### 3.6.3.1 GET Coleção com Filtro Opcional
+
+```csharp
+rangosEndpoints.MapGet("",
+    async Task<Results<NoContent, Ok<IEnumerable<RangoDTO>>>>
+    (
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        [FromQuery(Name ="name")] string? rangoNome
+    ) =>
+    {
+        var rangosEntity = await rangoDbContext.Rangos
+            .Where(x =>
+                rangoNome == null ||
+                x.Nome.ToLower().Contains(rangoNome.ToLower())
+            )
+            .ToListAsync();
+
+        if (rangosEntity.Count <= 0 || rangosEntity == null)
+            return TypedResults.NoContent();
+
+        return TypedResults.Ok(mapper.Map<IEnumerable<RangoDTO>>(rangosEntity));
+    });
+```
+
+#### 3.6.3.2 POST Criar Novo Rango
+
+```csharp
+rangosEndpoints.MapPost("",
+    async Task<CreatedAtRoute<RangoDTO>>
+    (
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        RangoForCreationDTO rangoForCreation
+    ) =>
+    {
+        var rangosEntity = mapper.Map<Rango>(rangoForCreation);
+
+        rangoDbContext.Add(rangosEntity);
+        await rangoDbContext.SaveChangesAsync();
+
+        var rangoToReturn = mapper.Map<RangoDTO>(rangosEntity);
+
+        return TypedResults.CreatedAtRoute(
+            rangoToReturn,
+            "GetRangos",
+            new { rangoId = rangoToReturn.Id }
+        );
+    });
+```
+
+### 3.6.4 Endpoints do Grupo `/rangos/{rangoId:int}`
+
+#### 3.6.4.1 GET Recurso Específico
+
+```csharp
+rangosComIDEndpoints.MapGet("",
+    async Task<Results<NotFound, Ok<RangoDTO>>>
+    (
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        int rangoId
+    ) =>
+    {
+        var EntityRango = await rangoDbContext.Rangos.FirstOrDefaultAsync(x => x.Id == rangoId);
+
+        return EntityRango is null
+            ? TypedResults.NotFound()
+            : TypedResults.Ok(mapper.Map<RangoDTO>(EntityRango));
+    }).WithName("GetRangos");
+```
+
+#### 3.6.4.2 PUT Atualizar Rango
+
+```csharp
+rangosComIDEndpoints.MapPut("",
+    async Task<Results<NotFound, Ok<RangoDTO>>>
+    (
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        RangoForUpdateDTO rangoForUpdate,
+        int rangoId
+    ) =>
+    {
+        var EntityRango = await rangoDbContext.Rangos.FirstOrDefaultAsync(x => x.Id == rangoId);
+
+        if (EntityRango == null)
+            return TypedResults.NotFound();
+
+        mapper.Map(rangoForUpdate, EntityRango);
+
+        await rangoDbContext.SaveChangesAsync();
+
+        var rangoToReturn = mapper.Map<RangoDTO>(EntityRango);
+
+        return TypedResults.Ok(rangoToReturn);
+    });
+```
+
+#### 3.6.4.3 DELETE Remover Rango
+
+```csharp
+rangosComIDEndpoints.MapDelete("",
+    async Task<Results<NotFound, Ok>>
+    (
+        RangoDbContext rangoDbContext,
+        int rangoId
+    ) =>
+    {
+        var EntityRango = await rangoDbContext.Rangos.FirstOrDefaultAsync(x => x.Id == rangoId);
+
+        if (EntityRango == null)
+            return TypedResults.NotFound();
+
+        rangoDbContext.Rangos.Remove(EntityRango);
+
+        await rangoDbContext.SaveChangesAsync();
+
+        return TypedResults.Ok();
+    });
+```
+
+### 3.6.5 Endpoints do Subgrupo `/rangos/{rangoId:int}/ingredientes`
+
+#### 3.6.5.1 GET Ingredientes do Rango
+
+```csharp
+ingredientesEndpoints.MapGet("",
+    async Task<Results<NoContent, Ok<IEnumerable<IngredienteDTO>>>>
+    (
+        RangoDbContext rangoDbContext,
+        IMapper mapper,
+        int rangoId
+    ) =>
+    {
+        var EntityIngredientes = await rangoDbContext.Rangos
+            .Include(r => r.Ingredientes)
+            .FirstOrDefaultAsync(r => r.Id == rangoId);
+
+        return EntityIngredientes is null
+            ? TypedResults.NoContent()
+            : TypedResults.Ok(mapper.Map<IEnumerable<IngredienteDTO>>(EntityIngredientes.Ingredientes));
+    });
+```
+
+### 3.6.6 Benefícios do Agrupamento de Endpoints
+
+- Redução de repetição de prefixos.
+- Organização hierárquica clara.
+- Facilita aplicação de políticas compartilhadas (ex.: autenticação).
+- Melhora a legibilidade e manutenção.
+- Permite versionamento modular da API.
+- Mantém a estrutura REST de forma natural.
+
+### 3.6.7 Boas Práticas
+
+- Criar grupos para cada recurso principal.
+- Utilizar subgrupos para relacionamentos hierárquicos.
+- Nomear rotas GET individuais para uso com `CreatedAtRoute`.
+- Evitar misturar rotas fora da estrutura agrupada.
+- Manter consistência entre nomes e padrões de URL.
+
+### 3.6.8 Conclusão
+O agrupamento de endpoints é uma técnica essencial para manter Minimal APIs organizadas, escaláveis e fáceis de navegar. A estrutura apresentada cria uma hierarquia clara de recursos e sub-recursos, reduz duplicação e melhora a manutenção da API como um todo. Essa abordagem é especialmente útil em APIs maiores, onde a modularidade se torna fundamental.
+
+# 4 Estrutura da Minimal API
+
