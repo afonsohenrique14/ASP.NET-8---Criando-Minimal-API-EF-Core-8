@@ -3181,3 +3181,606 @@ Essas ferramentas permitem consultas avançadas, dashboards e alertas.
 O uso adequado de logs em Minimal API melhora a rastreabilidade, facilita a manutenção e permite identificar problemas rapidamente. A combinação de logs estruturados, níveis adequados e integração com ferramentas de observabilidade fortalece a confiabilidade da aplicação.
 
 ---
+
+# 6 Endpoint Filter
+
+## 6.1 Criando Endpoint Filter em Minimal API
+
+### 6.1.1 Introdução
+Endpoint Filters permitem interceptar a execução de um endpoint antes e depois do processamento principal, adicionando lógica de validação, auditoria, autorização ou transformação de dados. Essa funcionalidade amplia o pipeline de Minimal API sem a necessidade de criar middlewares globais, permitindo regras específicas por endpoint.
+
+### 6.1.2 Objetivo do Endpoint Filter
+O filtro apresentado tem como finalidade impedir a atualização de um recurso específico quando o identificador recebido corresponde a um valor pré-definido. Esse tipo de regra é útil para cenários como:
+- Proteção de registros imutáveis.
+- Validação de parâmetros antes da execução do handler.
+- Retorno antecipado de erros padronizados.
+- Aplicação de regras de negócio específicas.
+
+### 6.1.3 Implementação do Endpoint Filter
+
+```csharp
+rangosComIDEndpoints.MapPut("", RangosHandlers.RangoPutAsync)
+    .AddEndpointFilter(
+        async (context, next) =>
+        {
+            var rangoId = context.GetArgument<int>(3);
+            var tropeiro_id = 8;
+
+            if (rangoId == tropeiro_id)
+            {
+                return TypedResults.Problem(new()
+                {
+                    Status = 400,
+                    Title = "Rango já é Perfeito, você não precisa modificar nada aqui.",
+                    Detail = "Você não pode modificar essa Receita"
+                });
+            }
+
+            var result = await next.Invoke(context);
+            return result;
+        }
+    );
+```
+
+### 6.1.4 Explicação da Sintaxe
+- `AddEndpointFilter(...)`  
+  Adiciona um filtro específico ao endpoint, executado antes do handler.
+- `context.GetArgument<int>(3)`  
+  Obtém o argumento do endpoint pela posição. No exemplo, o ID do recurso está na posição 3.
+- `next.Invoke(context)`  
+  Executa o próximo elemento do pipeline, normalmente o handler do endpoint.
+- `TypedResults.Problem(...)`  
+  Retorna uma resposta estruturada no padrão Problem Details (RFC 7807).
+- `Status = 400`  
+  Define o código HTTP indicando erro de requisição.
+
+### 6.1.5 Exemplo Prático com Validação Adicional
+Um filtro pode validar múltiplos parâmetros antes de permitir a execução do handler.
+
+```csharp
+.AddEndpointFilter(async (context, next) =>
+{
+    var id = context.GetArgument<int>(3);
+    var dto = context.GetArgument<RangoDTO>(4);
+
+    if (id <= 0)
+    {
+        return TypedResults.Problem(new()
+        {
+            Status = 400,
+            Title = "ID inválido",
+            Detail = "O identificador deve ser maior que zero."
+        });
+    }
+
+    if (string.IsNullOrWhiteSpace(dto.Nome))
+    {
+        return TypedResults.Problem(new()
+        {
+            Status = 400,
+            Title = "Nome inválido",
+            Detail = "O nome do Rango é obrigatório."
+        });
+    }
+
+    return await next(context);
+});
+```
+
+### 6.1.6 Comparação: Endpoint Filter vs Middleware
+
+| Característica | Endpoint Filter | Middleware |
+|----------------|-----------------|------------|
+| Escopo | Por endpoint | Global |
+| Acesso a argumentos | Sim, via `context.GetArgument` | Não |
+| Uso ideal | Validações específicas | Regras gerais |
+| Ordem de execução | Antes do handler | Antes de todos os endpoints |
+
+### 6.1.7 Boas Práticas
+- Utilizar filtros para regras específicas de endpoints, evitando poluir middlewares globais.
+- Evitar lógica complexa dentro do filtro; delegar ao domínio quando necessário.
+- Retornar Problem Details para manter consistência nas respostas de erro.
+- Documentar a posição dos argumentos quando usados com `GetArgument`.
+
+### 6.1.8 Exemplo Avançado com Logs e Métricas
+Um filtro pode registrar logs e medir o tempo de execução do handler.
+
+```csharp
+.AddEndpointFilter(async (context, next) =>
+{
+    var logger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                                                   .CreateLogger("RangoFilter");
+
+    var inicio = DateTime.UtcNow;
+    logger.LogInformation("Iniciando execução do endpoint.");
+
+    var resultado = await next(context);
+
+    var duracao = DateTime.UtcNow - inicio;
+    logger.LogInformation($"Execução concluída em {duracao.TotalMilliseconds} ms.");
+
+    return resultado;
+});
+```
+
+### 6.1.9 Conclusão
+Endpoint Filters ampliam a flexibilidade das Minimal APIs, permitindo validações e regras de negócio específicas por endpoint. A abordagem melhora a organização do código, reduz duplicação e mantém o pipeline mais limpo e modular.
+
+---
+## 6.2 Reutilizando Endpoint Filter em Minimal API
+
+### 6.2.1 Introdução
+A reutilização de Endpoint Filters permite aplicar regras de negócio de forma consistente em múltiplos endpoints, evitando duplicação de código e mantendo o pipeline mais organizado. A implementação de filtros parametrizáveis amplia ainda mais essa flexibilidade, permitindo que um mesmo filtro seja configurado com valores diferentes conforme a necessidade de cada rota.
+
+### 6.2.2 Objetivo do Filtro Parametrizável
+O filtro `RangosIsLockedFilter` tem como finalidade impedir alterações ou exclusões de registros específicos, definidos por um identificador imutável. A parametrização via construtor permite reutilizar o mesmo filtro para diferentes IDs bloqueados, mantendo a lógica centralizada e configurável.
+
+Esse padrão é útil para:
+- Proteger múltiplos registros especiais.
+- Aplicar regras de negócio específicas por endpoint.
+- Evitar repetição de validações nos handlers.
+- Facilitar manutenção e evolução das regras.
+
+### 6.2.3 Implementação do Filtro Parametrizável
+
+```csharp
+using System;
+
+namespace RangoAgil.API.EndpointFilters;
+
+public class RangosIsLockedFilter : IEndpointFilter
+{
+    public readonly int _LockedRangoID;
+
+    public RangosIsLockedFilter(int lockedRangoID)
+    {
+        _LockedRangoID = lockedRangoID;
+    }
+
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        int rangoId;
+
+        if (context.HttpContext.Request.Method == "PUT")
+        {
+            rangoId = context.GetArgument<int>(3);
+        }
+        else if (context.HttpContext.Request.Method == "DELETE")
+        {
+            rangoId = context.GetArgument<int>(1);
+        }
+        else
+        {
+            throw new NotSupportedException("This filter is not supported for this scenario.");
+        }
+
+        if (rangoId == _LockedRangoID)
+        {
+            return TypedResults.Problem(new()
+            {
+                Status = 400,
+                Title = "Rango já é Perfeito, você não precisa modificar ou deletar nada aqui.",
+                Detail = "Você não pode modificar ou deletar essa Receita"
+            });
+        }
+
+        var result = await next.Invoke(context);
+        return result;
+    }
+}
+```
+
+### 6.2.4 Explicação da Sintaxe
+- `RangosIsLockedFilter(int lockedRangoID)`  
+  Permite configurar o filtro com diferentes IDs bloqueados.
+- `context.GetArgument<int>(index)`  
+  Obtém o argumento do endpoint pela posição, variando conforme o verbo HTTP.
+- `TypedResults.Problem(...)`  
+  Retorna resposta padronizada no formato Problem Details.
+- `throw new NotSupportedException(...)`  
+  Garante que o filtro só seja aplicado a cenários suportados.
+- `next.Invoke(context)`  
+  Continua o pipeline caso a validação seja aprovada.
+
+### 6.2.5 Registro do Filtro em Múltiplos Endpoints
+
+```csharp
+public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
+{
+    var rangosEndpoints = app.MapGroup("/rangos");
+    var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+
+    rangosEndpoints.MapGet("", RangosHandlers.GetRangosAsync);
+
+    rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+                        .WithName("GetRangos");
+
+    rangosEndpoints.MapPost("", RangosHandlers.RangoPostAsync);
+
+    rangosComIDEndpoints.MapPut("", RangosHandlers.RangoPutAsync)
+                        .AddEndpointFilter(new RangosIsLockedFilter(8))
+                        .AddEndpointFilter(new RangosIsLockedFilter(10));
+
+    rangosComIDEndpoints.MapDelete("", RangosHandlers.RangoDeleteAsync)
+                        .AddEndpointFilter(new RangosIsLockedFilter(8))
+                        .AddEndpointFilter(new RangosIsLockedFilter(10));
+}
+```
+
+### 6.2.6 Comparação: Filtro Parametrizável vs Filtro Fixo
+
+| Característica | Parametrizável | Fixo |
+|----------------|----------------|------|
+| Reutilização | Alta | Baixa |
+| Flexibilidade | Permite múltiplas configurações | Uma única regra |
+| Manutenção | Centralizada | Pode gerar duplicação |
+| Aplicação | Configurável por endpoint | Limitada ao comportamento interno |
+
+### 6.2.7 Boas Práticas
+- Utilizar filtros parametrizáveis quando múltiplos valores precisam ser protegidos.
+- Documentar a posição dos argumentos usados no filtro.
+- Evitar lógica complexa dentro do filtro; delegar ao domínio quando necessário.
+- Garantir que o filtro seja aplicado apenas a verbos suportados.
+- Manter consistência nas respostas de erro utilizando Problem Details.
+
+### 6.2.8 Exemplo Avançado com Múltiplos IDs Bloqueados
+Um filtro pode ser adaptado para receber uma lista de IDs bloqueados:
+
+```csharp
+public class RangosIsLockedFilter : IEndpointFilter
+{
+    private readonly HashSet<int> _lockedIds;
+
+    public RangosIsLockedFilter(IEnumerable<int> lockedIds)
+    {
+        _lockedIds = new HashSet<int>(lockedIds);
+    }
+
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var id = context.GetArgument<int>(3);
+
+        if (_lockedIds.Contains(id))
+        {
+            return TypedResults.Problem(new()
+            {
+                Status = 400,
+                Title = "Rango protegido",
+                Detail = "Este Rango não pode ser modificado."
+            });
+        }
+
+        return await next(context);
+    }
+}
+```
+
+### 6.2.9 Conclusão
+A reutilização de Endpoint Filters parametrizáveis fortalece a modularidade e a consistência das regras aplicadas aos endpoints. Essa abordagem reduz duplicação, facilita manutenção e permite aplicar regras específicas de forma clara e configurável.
+
+---
+## 6.3 Agrupando Endpoint Filter em Minimal API
+
+### 6.3.1 Introdução
+O agrupamento de Endpoint Filters permite aplicar múltiplos filtros simultaneamente a um conjunto de endpoints, evitando repetição de código e garantindo que regras de negócio sejam aplicadas de forma consistente. Essa abordagem é especialmente útil quando vários endpoints compartilham as mesmas restrições, como bloqueio de IDs específicos, validações ou auditorias.
+
+### 6.3.2 Objetivo do Agrupamento de Filtros
+O agrupamento tem como finalidade:
+- Centralizar a aplicação de filtros em um único ponto.
+- Reduzir duplicação ao evitar chamadas repetidas de `.AddEndpointFilter(...)`.
+- Facilitar manutenção, permitindo adicionar ou remover filtros sem alterar cada endpoint individualmente.
+- Garantir que todos os endpoints do grupo compartilhem o mesmo comportamento.
+
+### 6.3.3 Implementação do Agrupamento de Filtros
+
+```csharp
+public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
+{
+    var rangosEndpoints = app.MapGroup("/rangos");
+    var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+    var rangosComIDEndpointsAndLockFilterEndpoints = rangosComIDEndpoints
+        .AddEndpointFilter(new RangosIsLockedFilter(8))
+        .AddEndpointFilter(new RangosIsLockedFilter(10));
+
+    rangosEndpoints.MapGet("", RangosHandlers.GetRangosAsync);
+
+    rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+                        .WithName("GetRangos");
+
+    rangosEndpoints.MapPost("", RangosHandlers.RangoPostAsync);
+
+    rangosComIDEndpointsAndLockFilterEndpoints.MapPut("", RangosHandlers.RangoPutAsync);
+    rangosComIDEndpointsAndLockFilterEndpoints.MapDelete("", RangosHandlers.RangoDeleteAsync);
+}
+```
+
+### 6.3.4 Explicação da Sintaxe
+- `MapGroup("/rangos")`  
+  Cria um agrupamento base para todos os endpoints relacionados a rangos.
+- `MapGroup("/{rangoId:int}")`  
+  Cria um subgrupo para endpoints que operam sobre um ID específico.
+- `AddEndpointFilter(...)`  
+  Aplica filtros ao grupo, garantindo que todos os endpoints subsequentes herdem esses filtros.
+- `rangosComIDEndpointsAndLockFilterEndpoints.MapPut(...)`  
+  Aplica o filtro agrupado automaticamente ao endpoint PUT.
+- `new RangosIsLockedFilter(8)` e `new RangosIsLockedFilter(10)`  
+  Configura dois filtros parametrizados, bloqueando IDs específicos.
+
+### 6.3.5 Benefícios do Agrupamento de Filtros
+
+- **Consistência** — todos os endpoints do grupo compartilham as mesmas regras.
+- **Escalabilidade** — novos endpoints adicionados ao grupo automaticamente recebem os filtros.
+- **Organização** — reduz poluição visual e repetição de código.
+- **Flexibilidade** — permite combinar múltiplos filtros em cadeia.
+
+### 6.3.6 Comparação: Filtros Agrupados vs Filtros Individuais
+
+| Característica | Filtros Agrupados | Filtros Individuais |
+|----------------|-------------------|----------------------|
+| Repetição de código | Baixa | Alta |
+| Manutenção | Centralizada | Distribuída |
+| Aplicação | Automática para o grupo | Manual por endpoint |
+| Flexibilidade | Alta | Moderada |
+
+### 6.3.7 Boas Práticas
+- Criar grupos de endpoints com responsabilidades claras antes de aplicar filtros.
+- Utilizar filtros agrupados para regras que se repetem em múltiplos endpoints.
+- Evitar aplicar filtros desnecessários a endpoints que não precisam da regra.
+- Documentar quais filtros estão aplicados ao grupo para facilitar manutenção.
+- Preferir filtros parametrizáveis quando múltiplos valores precisam ser bloqueados.
+
+### 6.3.8 Exemplo Avançado com Agrupamento e Filtros Adicionais
+Um grupo pode receber filtros de auditoria, validação e bloqueio simultaneamente:
+
+```csharp
+var rangosComIDEndpointsAndFilters = rangosComIDEndpoints
+    .AddEndpointFilter(new RangosIsLockedFilter(8))
+    .AddEndpointFilter(new RangosIsLockedFilter(10))
+    .AddEndpointFilter(new RangoAuditFilter());
+```
+
+Esse padrão permite compor regras complexas sem alterar os handlers.
+
+### 6.3.9 Conclusão
+O agrupamento de Endpoint Filters é uma técnica poderosa para manter o código organizado, reutilizável e consistente. Ao aplicar filtros diretamente ao grupo de endpoints, a aplicação ganha modularidade e reduz duplicação, facilitando a evolução das regras de negócio.
+
+---
+## 6.4 Logger em Endpoint Filter
+
+### 6.4.1 Introdução
+A utilização de logs dentro de Endpoint Filters permite registrar informações importantes sobre o comportamento dos endpoints após a execução do handler. Esse padrão é útil para auditoria, rastreamento de erros, monitoramento de respostas e identificação de padrões de falha. O filtro apresentado adiciona uma camada de observabilidade ao pipeline, registrando quando um recurso solicitado retorna *NotFound (404)*.
+
+### 6.4.2 Objetivo do Filtro de Log
+O filtro `LogNotFoundResponseFilter` tem como finalidade:
+- Detectar respostas com status HTTP 404.
+- Registrar informações relevantes sobre o recurso solicitado.
+- Auxiliar na identificação de rotas acessadas incorretamente.
+- Complementar o comportamento de filtros de validação ou bloqueio já existentes.
+
+Esse filtro é aplicado após a execução do handler, garantindo que a lógica de log seja baseada no resultado final do endpoint.
+
+### 6.4.3 Implementação do Filtro de Log
+
+```csharp
+using System.Net;
+
+namespace RangoAgil.API.EndpointFilters;
+
+public class LogNotFoundResponseFilter(ILogger<LogNotFoundResponseFilter> logger) : IEndpointFilter
+{
+    public readonly ILogger<LogNotFoundResponseFilter> _logger = logger;
+
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var result = await next(context);
+        var actualResults = (result is INestedHttpResult result1) ? result1.Result : (IResult)result!;
+
+        if (actualResults is IStatusCodeHttpResult { StatusCode: (int)HttpStatusCode.NotFound })
+        {
+            _logger.LogInformation($"Resource {context.HttpContext.Request.Path} was not found.");
+        }
+
+        return result;
+    }
+}
+```
+
+### 6.4.4 Explicação da Sintaxe
+- `ILogger<LogNotFoundResponseFilter>` injeta um logger específico para o filtro.
+- `next(context)` executa o handler e captura o resultado retornado.
+- `INestedHttpResult` permite acessar resultados encapsulados, comuns em respostas tipadas.
+- `IStatusCodeHttpResult` identifica respostas que possuem código HTTP associado.
+- `HttpStatusCode.NotFound` representa o status 404.
+- `_logger.LogInformation(...)` registra a ocorrência de recurso não encontrado.
+
+### 6.4.5 Registro do Filtro no Agrupamento de Endpoints
+
+```csharp
+public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
+{
+    var rangosEndpoints = app.MapGroup("/rangos");
+    var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+    var rangosComIDEndpointsAndLockFilterEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}")
+        .AddEndpointFilter(new RangosIsLockedFilter(8))
+        .AddEndpointFilter(new RangosIsLockedFilter(10))
+        .AddEndpointFilter<LogNotFoundResponseFilter>();
+
+    rangosEndpoints.MapGet("", RangosHandlers.GetRangosAsync);
+
+    rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+                        .WithName("GetRangos");
+
+    rangosEndpoints.MapPost("", RangosHandlers.RangoPostAsync);
+
+    rangosComIDEndpointsAndLockFilterEndpoints.MapPut("", RangosHandlers.RangoPutAsync);
+    rangosComIDEndpointsAndLockFilterEndpoints.MapDelete("", RangosHandlers.RangoDeleteAsync);
+}
+```
+
+### 6.4.6 Benefícios do Uso de Logs em Filtros
+- Registro automático de respostas críticas, como 404.
+- Observabilidade aprimorada sem modificar handlers.
+- Redução de duplicação de código de log.
+- Facilidade para identificar rotas acessadas incorretamente.
+- Integração natural com ferramentas de monitoramento.
+
+### 6.4.7 Comparação: Log no Handler vs Log no Filtro
+
+| Característica | Log no Handler | Log no Filtro |
+|----------------|----------------|----------------|
+| Localização | Dentro da lógica do endpoint | Fora do handler, no pipeline |
+| Reutilização | Baixa | Alta |
+| Consistência | Depende do desenvolvedor | Garantida pelo filtro |
+| Escopo | Específico | Abrange múltiplos endpoints |
+| Manutenção | Pode gerar duplicação | Centralizada |
+
+### 6.4.8 Boas Práticas
+- Utilizar filtros para logs que se repetem em vários endpoints.
+- Registrar apenas informações úteis para diagnóstico.
+- Evitar logs redundantes ou excessivos.
+- Manter filtros pequenos e focados em uma única responsabilidade.
+- Integrar logs com correlação de requisições (`TraceIdentifier`) quando necessário.
+
+### 6.4.9 Exemplo Avançado com Log Estruturado
+Um filtro pode registrar informações adicionais sobre a requisição:
+
+```csharp
+_logger.LogInformation("NotFound detected. Path: {path}, Method: {method}, TraceId: {trace}",
+    context.HttpContext.Request.Path,
+    context.HttpContext.Request.Method,
+    context.HttpContext.TraceIdentifier);
+```
+
+Esse padrão facilita consultas em ferramentas como Elastic Stack, Grafana Loki ou Application Insights.
+
+---
+
+## 6.5 Validação por Endpoint Filter em Minimal API
+
+### 6.5.1 Introdução
+A validação de dados é um dos pilares fundamentais no desenvolvimento de APIs. Em Minimal API, a validação pode ser aplicada diretamente no pipeline por meio de Endpoint Filters, permitindo que regras de validação sejam executadas antes da chamada ao handler. Essa abordagem mantém os handlers mais limpos, centraliza a lógica de validação e garante consistência entre endpoints.
+
+### 6.5.2 Objetivo do Filtro de Validação
+O filtro `ValidateAnnotationFilter` utiliza atributos de validação (`DataAnnotations`) combinados com a biblioteca `MiniValidation` para validar objetos recebidos no corpo da requisição. O objetivo é:
+- Garantir que o DTO enviado pelo cliente esteja em conformidade com as regras declaradas.
+- Retornar erros estruturados no formato Problem Details.
+- Evitar que handlers recebam dados inválidos.
+- Centralizar a validação, reduzindo duplicação de código.
+
+### 6.5.3 Modelo com Data Annotations
+
+```csharp
+using System;
+using System.ComponentModel.DataAnnotations;
+
+namespace RangoAgil.API.Models;
+
+public class RangoForCreationDTO
+{
+    [Required]
+    [StringLength(100, MinimumLength = 3)]
+    public required string Nome { get; set; }
+}
+```
+
+Esse DTO exige que:
+- O campo `Nome` seja obrigatório.
+- O nome tenha entre 3 e 100 caracteres.
+
+### 6.5.4 Implementação do Endpoint Filter de Validação
+
+```csharp
+using System;
+using MiniValidation;
+using RangoAgil.API.Models;
+
+namespace RangoAgil.API.EndpointFilters;
+
+public class ValidateAnnotationFilter : IEndpointFilter
+{
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        var rangoForCreationDTO = context.GetArgument<RangoForCreationDTO>(2);
+
+        if (!MiniValidator.TryValidate(rangoForCreationDTO, out var validationErros))
+        {
+            return TypedResults.ValidationProblem(validationErros);
+        }
+
+        return await next(context);
+    }
+}
+```
+
+### 6.5.5 Explicação da Sintaxe
+- `context.GetArgument<RangoForCreationDTO>(2)` obtém o DTO enviado no corpo da requisição.
+- `MiniValidator.TryValidate(...)` executa a validação baseada nos atributos declarados no modelo.
+- `TypedResults.ValidationProblem(...)` retorna erros estruturados conforme RFC 7807.
+- `next(context)` executa o handler apenas se a validação for bem-sucedida.
+
+### 6.5.6 Registro do Filtro no Endpoint POST
+
+```csharp
+public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
+{
+    var rangosEndpoints = app.MapGroup("/rangos");
+    var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+    var rangosComIDEndpointsAndLockFilterEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}")
+        .AddEndpointFilter(new RangosIsLockedFilter(8))
+        .AddEndpointFilter(new RangosIsLockedFilter(10))
+        .AddEndpointFilter<LogNotFoundResponseFilter>();
+
+    rangosEndpoints.MapGet("", RangosHandlers.GetRangosAsync);
+
+    rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+                        .WithName("GetRangos");
+
+    rangosEndpoints.MapPost("", RangosHandlers.RangoPostAsync)
+                   .AddEndpointFilter<ValidateAnnotationFilter>();
+
+    rangosComIDEndpointsAndLockFilterEndpoints.MapPut("", RangosHandlers.RangoPutAsync);
+    rangosComIDEndpointsAndLockFilterEndpoints.MapDelete("", RangosHandlers.RangoDeleteAsync);
+}
+```
+
+### 6.5.7 Benefícios da Validação via Endpoint Filter
+- **Centralização** da lógica de validação.
+- **Reutilização** do filtro em múltiplos endpoints.
+- **Separação de responsabilidades**, mantendo handlers focados na lógica de negócio.
+- **Consistência** nas respostas de erro.
+- **Flexibilidade** para combinar validação com outros filtros (logs, bloqueios, auditoria).
+
+### 6.5.8 Comparação: Validação no Handler vs Endpoint Filter
+
+| Característica | Handler | Endpoint Filter |
+|----------------|---------|-----------------|
+| Reutilização | Baixa | Alta |
+| Organização | Mistura validação com lógica de negócio | Validação isolada |
+| Consistência | Depende do desenvolvedor | Garantida |
+| Manutenção | Pode gerar duplicação | Centralizada |
+| Escalabilidade | Limitada | Ideal para múltiplos endpoints |
+
+### 6.5.9 Exemplo Avançado com Múltiplos DTOs
+Um filtro pode validar diferentes tipos de DTOs usando reflexão:
+
+```csharp
+public class GenericValidationFilter : IEndpointFilter
+{
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
+    {
+        foreach (var arg in context.Arguments)
+        {
+            if (MiniValidator.TryValidate(arg, out var errors) == false)
+            {
+                return TypedResults.ValidationProblem(errors);
+            }
+        }
+
+        return await next(context);
+    }
+}
+```
+
+Esse padrão permite validar qualquer objeto anotado com DataAnnotations.
+
+---
