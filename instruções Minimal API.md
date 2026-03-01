@@ -3667,6 +3667,12 @@ O filtro `ValidateAnnotationFilter` utiliza atributos de validação (`DataAnnot
 - Evitar que handlers recebam dados inválidos.
 - Centralizar a validação, reduzindo duplicação de código.
 
+#### 6.5.2.1 Instalação da biblioteca `MiniValidation`
+
+```shell
+dotnet add package MiniValidation   
+```
+
 ### 6.5.3 Modelo com Data Annotations
 
 ```csharp
@@ -3782,5 +3788,297 @@ public class GenericValidationFilter : IEndpointFilter
 ```
 
 Esse padrão permite validar qualquer objeto anotado com DataAnnotations.
+
+---
+
+# 7 Segurança e Configuração
+
+## 7.1 Swagger em Minimal API
+
+### 7.1.1 Introdução
+Swagger é uma ferramenta essencial para documentação, exploração e teste de APIs REST. Em aplicações Minimal API, a integração com *Swashbuckle.AspNetCore* permite gerar automaticamente a especificação OpenAPI e disponibilizar uma interface gráfica interativa para inspeção dos endpoints. Isso facilita o desenvolvimento, depuração e comunicação entre equipes.
+
+### 7.1.2 Instalação do Swashbuckle.AspNetCore
+A instalação é realizada via CLI:
+
+```bash
+dotnet add package Swashbuckle.AspNetCore
+```
+
+Esse pacote adiciona suporte completo ao Swagger e ao Swagger UI.
+
+### 7.1.3 Configuração do LaunchSettings para Abrir o Swagger
+O arquivo `launchSettings.json` pode ser configurado para abrir automaticamente o Swagger ao iniciar a aplicação:
+
+```json
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "http://localhost:5148",
+      "launchUrl": "swagger",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "applicationUrl": "https://localhost:7043;http://localhost:5148",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
+```
+
+Essa configuração garante que o navegador abra diretamente a interface do Swagger ao iniciar o projeto.
+
+### 7.1.4 Registro dos Serviços Necessários
+A aplicação precisa registrar os serviços responsáveis pela geração da documentação OpenAPI:
+
+```csharp
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+```
+
+- `AddEndpointsApiExplorer()` habilita a descoberta automática dos endpoints.
+- `AddSwaggerGen()` gera a especificação OpenAPI e configura o Swagger UI.
+
+### 7.1.5 Configuração do ProblemDetails
+A aplicação também utiliza Problem Details com metadados adicionais:
+
+```csharp
+builder.Services.AddProblemDetails(options =>
+{
+    options.CustomizeProblemDetails = context =>
+    {
+        context.ProblemDetails.Extensions["requestId"] = context.HttpContext.TraceIdentifier;
+        context.ProblemDetails.Extensions["timestamp"] = DateTime.UtcNow;
+    };
+});
+```
+
+Essa configuração adiciona informações úteis para rastreamento e auditoria.
+
+### 7.1.6 Pipeline da Aplicação com Swagger
+
+```csharp
+var app = builder.Build();
+
+if (app.Environment.IsProduction())
+{
+    app.UseExceptionHandler();
+}
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.RegisterRangosEndpoints();
+app.RegisterIngredientesEndpoints();
+
+app.Run();
+```
+
+- Em **produção**, o Swagger é desabilitado por padrão.
+- Em **desenvolvimento**, o Swagger e o Swagger UI são habilitados automaticamente.
+
+### 7.1.7 Explicação da Sintaxe
+- `app.UseSwagger()` gera o documento OpenAPI em tempo de execução.
+- `app.UseSwaggerUI()` habilita a interface gráfica interativa.
+- `launchUrl: "swagger"` abre automaticamente o Swagger no navegador.
+- `AddEndpointsApiExplorer()` é obrigatório para Minimal API, pois descobre endpoints definidos via `MapGet`, `MapPost`, etc.
+
+### 7.1.8 Exemplo Prático de Endpoint Documentado
+Swagger detecta automaticamente endpoints Minimal API:
+
+```csharp
+app.MapGet("/rangos", async (RangoDbContext db) =>
+{
+    var rangos = await db.Rangos.ToListAsync();
+    return TypedResults.Ok(rangos);
+})
+.WithName("GetRangos")
+.WithSummary("Retorna todos os rangos cadastrados.")
+.WithDescription("Endpoint responsável por listar todos os rangos disponíveis no banco de dados.");
+```
+
+As extensões `WithSummary` e `WithDescription` enriquecem a documentação gerada.
+
+### 7.1.9 Boas Práticas
+- Habilitar Swagger apenas em desenvolvimento.
+- Utilizar `WithSummary`, `WithDescription` e `WithTags` para melhorar a documentação.
+- Versionar a API e configurar múltiplos documentos OpenAPI quando necessário.
+- Adicionar segurança (JWT, API Key) ao Swagger quando aplicável.
+- Manter consistência entre nomes, descrições e respostas documentadas.
+
+### 7.1.10 Comparação: Swagger vs Ferramentas Alternativas
+
+| Ferramenta | Características | Vantagens |
+|------------|-----------------|-----------|
+| Swagger (Swashbuckle) | Padrão de mercado, integrado ao ASP.NET | Fácil configuração, UI robusta |
+| NSwag | Gera clientes TypeScript/C# | Ideal para geração automática de SDKs |
+| OpenAPI CLI | Independente de linguagem | Flexível, porém menos integrado |
+
+### 7.1.11 Conclusão
+A integração do Swagger em Minimal API melhora a experiência de desenvolvimento, facilita testes e fornece documentação clara e acessível. A configuração apresentada garante uma documentação completa, organizada e alinhada às boas práticas do ecossistema .NET.
+
+---
+## 7.2 Endpoint Deprecated, Summary e Descrição em Minimal API
+
+### 7.2.1 Introdução
+A anotação de endpoints com informações de *deprecated*, *summary* e *description* melhora a documentação gerada pelo Swagger/OpenAPI, tornando a API mais clara para consumidores e facilitando a evolução da aplicação. A combinação de metadados personalizados, *operation filters* e extensões nativas do ASP.NET permite marcar rotas como obsoletas, orientar migrações e enriquecer a documentação.
+
+### 7.2.2 Objetivo da Marcação de Endpoints
+A marcação de endpoints como obsoletos tem como finalidade:
+- Informar consumidores sobre rotas que serão removidas futuramente.
+- Evitar uso indevido de endpoints antigos.
+- Facilitar transição para novas versões da API.
+- Documentar claramente o motivo e a alternativa recomendada.
+
+O uso de *summary* e *description* complementa a documentação, tornando o Swagger mais informativo e profissional.
+
+### 7.2.3 Implementação do Endpoint Deprecated
+
+```csharp
+app.MapGet("/pratos/{pratoId:int}", (int pratoId) => $"O prato {pratoId} é delicioso.")
+    .WithMetadata(new DeprecatedInSwaggerMetadata())
+    .AddOpenApiOperationTransformer((operation, context, ct) =>
+    {
+        operation.Deprecated = true;
+        return Task.CompletedTask;
+    })
+    .WithSummary("Este endpoint está deprecated e será descontinuado na versão 2 desta API.")
+    .WithDescription("Por favor utilize a outra rota desta API sendo ela /rangos/{rangoId} para evitar maiores transtornos.");
+```
+
+Esse endpoint:
+- É marcado como *deprecated*.
+- Recebe um resumo explicando sua descontinuação.
+- Recebe uma descrição orientando o uso da rota alternativa.
+
+### 7.2.4 Metadado Personalizado para Deprecated
+
+```csharp
+namespace RangoAgil.API.Metadatas;
+
+public class DeprecatedInSwaggerMetadata
+{
+}
+```
+
+Esse metadado é utilizado pelo *operation filter* para identificar endpoints obsoletos.
+
+### 7.2.5 Operation Filter para Marcar Deprecated no Swagger
+
+```csharp
+using Microsoft.OpenApi;
+using RangoAgil.API.Metadatas;
+using Swashbuckle.AspNetCore.SwaggerGen;
+
+namespace RangoAgil.API.OperationFilters;
+
+public sealed class DeprecatedInSwaggerOperationFilter : IOperationFilter
+{
+    public void Apply(OpenApiOperation operation, OperationFilterContext context)
+    {
+        var hasMetadata =
+            context.ApiDescription.ActionDescriptor.EndpointMetadata
+                .OfType<DeprecatedInSwaggerMetadata>()
+                .Any();
+
+        if (hasMetadata)
+        {
+            operation.Deprecated = true;
+        }
+    }
+}
+```
+
+Esse filtro:
+- Verifica se o endpoint possui o metadado `DeprecatedInSwaggerMetadata`.
+- Marca a operação como obsoleta no documento OpenAPI.
+
+### 7.2.6 Registro do Swagger com Operation Filter
+
+```csharp
+builder.Services.AddSwaggerGen(c =>
+{
+    c.OperationFilter<DeprecatedInSwaggerOperationFilter>();
+});
+builder.Services.AddOpenApi();
+```
+
+A adição do `AddOpenApi()` habilita recursos adicionais de documentação no ASP.NET.
+
+### 7.2.7 Registro dos Endpoints com Summary e Description
+
+```csharp
+public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
+{
+    app.MapGet("/pratos/{pratoId:int}", (int pratoId) => $"O prato {pratoId} é delicioso.")
+        .WithMetadata(new DeprecatedInSwaggerMetadata())
+        .AddOpenApiOperationTransformer((operation, context, ct) =>
+        {
+            operation.Deprecated = true;
+            return Task.CompletedTask;
+        })
+        .WithSummary("Este endpoint está deprecated e será descontinuado na versão 2 desta API.")
+        .WithDescription("Por favor utilize a outra rota desta API sendo ela /rangos/{rangoId} para evitar maiores transtornos.");
+
+    var rangosEndpoints = app.MapGroup("/rangos");
+
+    var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+    var rangosComIDEndpointsAndLockFilterEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}")
+        .AddEndpointFilter(new RangosIsLockedFilter(8))
+        .AddEndpointFilter(new RangosIsLockedFilter(10))
+        .AddEndpointFilter<LogNotFoundResponseFilter>();
+
+    rangosEndpoints.MapGet("", RangosHandlers.GetRangosAsync)
+        .WithSummary("Está rota retornará uma lista com todos os rangos.");
+
+    rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+        .WithName("GetRangos");
+
+    rangosEndpoints.MapPost("", RangosHandlers.RangoPostAsync)
+        .AddEndpointFilter<ValidateAnnotationFilter>();
+
+    rangosComIDEndpointsAndLockFilterEndpoints.MapPut("", RangosHandlers.RangoPutAsync);
+    rangosComIDEndpointsAndLockFilterEndpoints.MapDelete("", RangosHandlers.RangoDeleteAsync);
+}
+```
+
+### 7.2.8 Explicação da Sintaxe
+- `WithMetadata(...)` adiciona metadados personalizados ao endpoint.
+- `AddOpenApiOperationTransformer(...)` altera a operação OpenAPI antes da geração do documento.
+- `operation.Deprecated = true` marca o endpoint como obsoleto.
+- `WithSummary(...)` adiciona um resumo curto exibido no Swagger UI.
+- `WithDescription(...)` adiciona uma descrição detalhada para orientar o consumidor da API.
+
+### 7.2.9 Benefícios da Documentação Avançada
+- Melhora a experiência de desenvolvedores que consomem a API.
+- Facilita a migração entre versões.
+- Reduz erros de uso de endpoints obsoletos.
+- Torna o Swagger mais completo e profissional.
+- Permite versionamento gradual da API.
+
+### 7.2.10 Comparação: Deprecated via Metadata vs via Operation Transformer
+
+| Abordagem | Características | Vantagens |
+|----------|-----------------|-----------|
+| Metadado + OperationFilter | Centralizado, reutilizável | Ideal para grandes APIs |
+| OperationTransformer direto no endpoint | Local, explícito | Útil para casos pontuais |
+
+### 7.2.11 Conclusão
+A combinação de metadados personalizados, filtros de operação e extensões de documentação permite criar uma API bem documentada, clara e preparada para evolução. A marcação de endpoints como *deprecated*, aliada ao uso de *summary* e *description*, melhora a comunicação com consumidores e reduz riscos de uso incorreto.
 
 ---
