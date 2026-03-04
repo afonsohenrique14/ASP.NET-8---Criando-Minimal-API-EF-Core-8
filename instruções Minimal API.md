@@ -4082,3 +4082,475 @@ public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
 A combinação de metadados personalizados, filtros de operação e extensões de documentação permite criar uma API bem documentada, clara e preparada para evolução. A marcação de endpoints como *deprecated*, aliada ao uso de *summary* e *description*, melhora a comunicação com consumidores e reduz riscos de uso incorreto.
 
 ---
+## 7.3 Autenticação e Autorização em Minimal API
+
+### 7.3.1 Introdução
+A autenticação e autorização são componentes essenciais para proteger APIs, controlar acesso a recursos e garantir que apenas usuários ou sistemas autorizados executem determinadas operações. Em Minimal API, a integração com JWT Bearer é direta e segue o padrão do ASP.NET Core, permitindo validar tokens emitidos por provedores externos ou internos.
+
+A configuração apresentada utiliza o esquema **Bearer**, valida emissor e audiência, e aplica políticas de autorização diretamente nos grupos de endpoints.
+
+### 7.3.2 Configuração do Pacote de Autenticação JWT
+A instalação do pacote é realizada via CLI:
+
+```bash
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+```
+
+Esse pacote habilita o middleware de autenticação JWT Bearer.
+
+### 7.3.3 Configuração do JWT no appsettings.json
+
+```json
+"Authentication": {
+  "DefaultScheme": "Bearer",
+  "Schemes": {
+    "Bearer": {
+      "ValidAudiences": [
+        "rangos-api"
+      ],
+      "ValidIssuer": "the_component_that_created_the_token"
+    }
+  }
+}
+```
+
+Essa configuração define:
+- **DefaultScheme** como Bearer.
+- **ValidIssuer** para validar quem emitiu o token.
+- **ValidAudiences** para validar quem pode consumir o token.
+
+### 7.3.4 Registro dos Serviços de Autenticação e Autorização
+
+```csharp
+builder.Services.AddAuthentication().AddJwtBearer();
+builder.Services.AddAuthorization();
+```
+
+- `AddAuthentication()` registra o middleware de autenticação.
+- `AddJwtBearer()` habilita validação de tokens JWT.
+- `AddAuthorization()` habilita políticas e atributos de autorização.
+
+### 7.3.5 Pipeline de Autenticação e Autorização
+
+```csharp
+app.UseAuthentication();
+app.UseAuthorization();
+```
+
+A ordem é importante:
+1. **Autenticação** identifica o usuário.
+2. **Autorização** verifica se o usuário pode acessar o recurso.
+
+### 7.3.6 Aplicação de Autorização nos Endpoints
+
+```csharp
+var rangosEndpoints = app.MapGroup("/rangos")
+    .RequireAuthorization();
+```
+
+Esse grupo exige autenticação para todos os endpoints internos.
+
+### 7.3.7 Exceções com AllowAnonymous
+
+```csharp
+rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+    .WithName("GetRangos")
+    .AllowAnonymous();
+```
+
+Esse endpoint específico permite acesso sem autenticação, mesmo estando dentro de um grupo protegido.
+
+### 7.3.8 Registro Completo dos Endpoints com Autorização
+
+```csharp
+public static void RegisterRangosEndpoints(this IEndpointRouteBuilder app)
+{
+    app.MapGet("/pratos/{pratoId:int}", (int pratoId)=> $"O prato {pratoId} é delicioso.")
+        .WithMetadata(new DeprecatedInSwaggerMetadata())
+        .AddOpenApiOperationTransformer((operation, context, ct) =>
+        {
+            operation.Deprecated = true;
+            return Task.CompletedTask;
+        })
+        .WithSummary("Este endpoint está deprecated e será descontinuado na versão 2 desta API.")
+        .WithDescription("Por favor utilize a outra rota desta API sendo ela /rangos/{rangoId} para evitar maiores transtornos.");
+
+    var rangosEndpoints = app.MapGroup("/rangos")
+        .RequireAuthorization();
+
+    var rangosComIDEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}");
+    var rangosComIDEndpointsAndLockFilterEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}")
+        .AddEndpointFilter(new RangosIsLockedFilter(8))
+        .AddEndpointFilter(new RangosIsLockedFilter(10))
+        .AddEndpointFilter<LogNotFoundResponseFilter>();
+
+    rangosEndpoints.MapGet("", RangosHandlers.GetRangosAsync)
+        .WithSummary("Está rota retornará uma lista com todos os rangos.");
+
+    rangosComIDEndpoints.MapGet("", RangosHandlers.GetRangoByIdAsync)
+        .WithName("GetRangos")
+        .AllowAnonymous();
+
+    rangosEndpoints.MapPost("", RangosHandlers.RangoPostAsync)
+        .AddEndpointFilter<ValidateAnnotationFilter>();
+
+    rangosComIDEndpointsAndLockFilterEndpoints.MapPut("", RangosHandlers.RangoPutAsync);
+    rangosComIDEndpointsAndLockFilterEndpoints.MapDelete("", RangosHandlers.RangoDeleteAsync);
+}
+```
+
+### 7.3.9 Explicação da Sintaxe
+- `RequireAuthorization()` aplica autorização a todos os endpoints do grupo.
+- `AllowAnonymous()` permite exceções dentro de grupos protegidos.
+- `AddJwtBearer()` habilita validação de tokens JWT.
+- `UseAuthentication()` deve vir antes de `UseAuthorization()` no pipeline.
+- `ValidIssuer` e `ValidAudiences` garantem que o token seja confiável.
+
+### 7.3.10 Boas Práticas
+- Proteger grupos inteiros com `RequireAuthorization()` para evitar endpoints esquecidos.
+- Usar `AllowAnonymous()` apenas quando necessário.
+- Validar emissor e audiência para evitar tokens falsificados.
+- Utilizar HTTPS para proteger o envio do token.
+- Documentar no Swagger quais endpoints exigem autenticação.
+
+### 7.3.11 Comparação: Autenticação vs Autorização
+
+| Conceito | Função | Exemplo |
+|---------|--------|---------|
+| Autenticação | Identifica quem é o usuário | Validar token JWT |
+| Autorização | Verifica se o usuário pode acessar o recurso | Permitir apenas admins em um endpoint |
+
+### 7.3.12 Conclusão
+A integração de autenticação e autorização com JWT em Minimal API fornece uma camada robusta de segurança, permitindo controlar acesso a recursos sensíveis e proteger operações críticas. A combinação de grupos protegidos, filtros e validação de tokens garante uma API segura, escalável e alinhada às boas práticas modernas.
+
+---
+
+## 7.4 Criando Token via Terminal com `dotnet user-jwts`
+
+### 7.4.1 Introdução
+A criação de tokens JWT diretamente pelo terminal utilizando o comando `dotnet user-jwts` é uma forma prática de gerar tokens válidos para desenvolvimento e testes locais. Esse recurso é integrado ao .NET SDK e facilita a autenticação em APIs protegidas sem necessidade de implementar imediatamente um provedor de identidade completo.
+
+O token gerado segue as configurações definidas no `appsettings.json`, incluindo emissor (*issuer*) e audiência (*audience*), garantindo compatibilidade com o middleware `JwtBearer`.
+
+### 7.4.2 Criando o Token JWT via Terminal
+O comando abaixo cria um token JWT com a audiência configurada para `"rangos-api"`:
+
+```bash
+dotnet user-jwts create --audience rangos-api
+```
+
+Após executar o comando, o terminal exibirá:
+- O token JWT completo.
+- A data de expiração.
+- O issuer utilizado.
+- As claims padrão.
+
+Esse token pode ser utilizado diretamente no Swagger ou em ferramentas como Postman e Insomnia.
+
+### 7.4.3 Configuração do `appsettings.json` para Tokens Criados via Terminal
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "ConnectionStrings": {
+    "RangoDBConStr": "Data Source=Rango.db"
+  },
+  "AllowedHosts": "*",
+  "Authentication": {
+    "DefaultScheme": "Bearer",
+    "Schemes": {
+      "Bearer": {
+        "ValidAudiences": [
+          "rangos-api"
+        ],
+        "ValidIssuer": "dotnet-user-jwts"
+      }
+    }
+  }
+}
+```
+
+Explicação dos campos:
+- **DefaultScheme** define o esquema padrão de autenticação.
+- **ValidAudiences** deve corresponder ao parâmetro `--audience` usado no terminal.
+- **ValidIssuer** deve ser `"dotnet-user-jwts"` quando o token é criado via CLI.
+- O middleware `JwtBearer` validará automaticamente essas informações.
+
+### 7.4.4 Integração com a Aplicação
+
+```csharp
+builder.Services.AddAuthentication().AddJwtBearer();
+builder.Services.AddAuthorization();
+```
+
+E no pipeline:
+
+```csharp
+app.UseAuthentication();
+app.UseAuthorization();
+```
+
+Com isso, qualquer endpoint protegido por `.RequireAuthorization()` exigirá um token JWT válido.
+
+### 7.4.5 Testando o Token no Swagger
+Com o Swagger habilitado em ambiente de desenvolvimento:
+
+1. Execute a API.
+2. Abra o Swagger UI.
+3. Clique em **Authorize**.
+4. Insira o token no formato:
+
+```
+Bearer SEU_TOKEN_AQUI
+```
+
+5. Execute os endpoints protegidos normalmente.
+
+### 7.4.6 Validando o Token no jwt.io
+O site https://www.jwt.io/ permite:
+- Decodificar o token.
+- Visualizar claims.
+- Verificar estrutura.
+- Validar assinatura (quando configurado).
+
+Esse recurso é útil para depuração e entendimento do conteúdo do JWT.
+
+### 7.4.7 Boas Práticas
+- Utilizar `dotnet user-jwts` apenas em desenvolvimento.
+- Nunca expor tokens gerados em ambientes públicos.
+- Validar emissor e audiência para evitar tokens falsificados.
+- Utilizar HTTPS para proteger o envio do token.
+- Documentar no Swagger quais endpoints exigem autenticação.
+
+### 7.4.8 Comparação: Token via Terminal vs Token via Identity Provider
+
+| Método | Características | Uso Ideal |
+|--------|------------------|-----------|
+| `dotnet user-jwts` | Rápido, local, sem servidor externo | Desenvolvimento e testes |
+| Identity Provider (Azure AD, Auth0, Keycloak) | Seguro, escalável, com roles e políticas | Produção |
+
+### 7.4.9 Conclusão
+A criação de tokens JWT via terminal com `dotnet user-jwts` simplifica o desenvolvimento de APIs protegidas, permitindo testar autenticação e autorização de forma rápida e segura. A integração com o middleware `JwtBearer` garante compatibilidade imediata com Minimal API e facilita a evolução para provedores de identidade mais robustos no futuro.
+
+---
+## 7.5 Token com Policy, Role e Claim em Minimal API
+
+### 7.5.1 Introdução
+A combinação de **roles**, **claims** e **policies** permite criar regras de autorização altamente específicas em Minimal API. Essa abordagem garante que apenas usuários com permissões adequadas acessem determinados recursos, fortalecendo a segurança da aplicação. A integração com tokens JWT criados via `dotnet user-jwts` facilita o desenvolvimento local e a validação dessas regras.
+
+### 7.5.2 Criando Token com Role e Claim via Terminal
+O comando abaixo cria um token JWT contendo:
+- **audience**: rangos-api  
+- **role**: admin  
+- **claim**: country=Brazil  
+
+```bash
+dotnet user-jwts create --audience rangos-api --claim country=Brazil --role admin
+```
+
+Esse token será validado pelas políticas configuradas na aplicação.
+
+### 7.5.3 Configuração do appsettings.json para Validar Role e Claim
+
+```json
+"Authentication": {
+  "DefaultScheme": "Bearer",
+  "Schemes": {
+    "Bearer": {
+      "ValidAudiences": [
+        "rangos-api"
+      ],
+      "ValidIssuer": "dotnet-user-jwts"
+    }
+  }
+}
+```
+
+Essa configuração garante que o middleware `JwtBearer` valide corretamente o token emitido via CLI.
+
+### 7.5.4 Definição de Policies com Role e Claim
+
+```csharp
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("RequireAdminFromBrazil", policy =>
+        policy
+            .RequireRole("admin")
+            .RequireClaim("country", "Brazil")
+    )
+    .AddPolicy("RequirManagerFromBrazil", policy =>
+        policy
+            .RequireRole("Manager")
+            .RequireClaim("country", "Brazil")
+    );
+```
+
+Explicação:
+- **RequireRole("admin")** exige que o token contenha o role admin.
+- **RequireClaim("country", "Brazil")** exige que o token contenha a claim country=Brazil.
+- Policies permitem combinar múltiplas regras de forma declarativa.
+
+### 7.5.5 Aplicando Policy em Grupos de Endpoints
+
+```csharp
+var rangosComIDEndpointsAndLockFilterEndpoints = rangosEndpoints.MapGroup("/{rangoId:int}")
+    .RequireAuthorization("RequireAdminFromBrazil")
+    .AddEndpointFilter(new RangosIsLockedFilter(8))
+    .AddEndpointFilter(new RangosIsLockedFilter(10))
+    .AddEndpointFilter<LogNotFoundResponseFilter>();
+```
+
+Esse grupo exige:
+- Token válido.
+- Role admin.
+- Claim country=Brazil.
+
+Somente usuários com essas características poderão acessar PUT e DELETE.
+
+### 7.5.6 Explicação da Sintaxe
+- **RequireAuthorization("RequireAdminFromBrazil")** aplica a policy ao grupo inteiro.
+- **RequireRole** e **RequireClaim** são avaliados pelo middleware de autorização.
+- **dotnet user-jwts** injeta automaticamente roles e claims no token.
+- **AddEndpointFilter** continua funcionando normalmente, complementando a autorização com regras de negócio.
+
+### 7.5.7 Exemplo Completo de Token Gerado
+Após executar o comando, o terminal exibirá algo como:
+
+```
+Token:
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+Claims:
+- role: admin
+- country: Brazil
+- aud: rangos-api
+- iss: dotnet-user-jwts
+```
+
+Esse token pode ser usado no Swagger ou Postman.
+
+### 7.5.8 Comparação entre Role, Claim e Policy
+
+| Elemento | Função | Exemplo |
+|----------|--------|---------|
+| Role | Representa o papel do usuário | admin, Manager |
+| Claim | Informação adicional sobre o usuário | country=Brazil |
+| Policy | Combinação de regras | role + claim |
+
+Policies permitem criar regras complexas sem poluir os endpoints.
+
+### 7.5.9 Boas Práticas
+- Criar policies descritivas e específicas.
+- Evitar lógica de autorização dentro dos handlers.
+- Utilizar claims para informações contextuais (país, departamento, nível de acesso).
+- Utilizar roles para permissões amplas (admin, manager).
+- Testar tokens no https://www.jwt.io/ para validar conteúdo.
+
+### 7.5.10 Conclusão
+A combinação de tokens JWT com roles, claims e policies fornece uma camada robusta de autorização em Minimal API. Essa abordagem permite proteger endpoints sensíveis, aplicar regras específicas por grupo e manter o código organizado e seguro.
+
+---
+
+## 7.6 Adicionando Token no Swagger
+
+### 7.6.1 Introdução
+A integração de autenticação JWT com Swagger permite testar endpoints protegidos diretamente pela interface gráfica, fornecendo uma experiência completa de desenvolvimento e depuração. Para isso, é necessário configurar o Swagger para reconhecer o esquema de segurança *Bearer* e permitir que o usuário insira o token JWT no botão **Authorize**.
+
+A configuração apresentada adiciona uma definição de segurança personalizada chamada **TokenAuthRango**, além de um requisito global que aplica essa definição a todas as operações documentadas.
+
+### 7.6.2 Definição do Esquema de Segurança no Swagger
+
+```csharp
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("TokenAuthRango",
+        new OpenApiSecurityScheme
+        {
+            Name = "Autorization",
+            Description = "Token baseado em autenticação e autorização",
+            Type = SecuritySchemeType.Http,
+            Scheme = "Bearer",
+            In = ParameterLocation.Header
+        }
+    );
+
+    options.AddSecurityRequirement(document => new OpenApiSecurityRequirement
+    {
+        [new OpenApiSecuritySchemeReference("TokenAuthRango", document)] = new List<string>()
+    });
+
+    options.OperationFilter<DeprecatedInSwaggerOperationFilter>();
+});
+```
+
+### 7.6.3 Explicação da Sintaxe
+- **AddSecurityDefinition("TokenAuthRango", …)**  
+  Registra um esquema de segurança chamado *TokenAuthRango*, que será exibido no Swagger UI.
+- **Type = SecuritySchemeType.Http**  
+  Indica que o esquema utiliza autenticação HTTP.
+- **Scheme = "Bearer"**  
+  Define o uso do padrão Bearer Token.
+- **In = ParameterLocation.Header**  
+  O token será enviado no cabeçalho da requisição.
+- **AddSecurityRequirement(...)**  
+  Aplica o esquema de segurança a todas as operações, exigindo que o usuário forneça um token para endpoints protegidos.
+- **OpenApiSecuritySchemeReference**  
+  Faz referência ao esquema definido anteriormente, garantindo consistência entre definição e requisito.
+
+### 7.6.4 Como o Swagger Passa a Funcionar com JWT
+Após essa configuração:
+- O Swagger exibirá o botão **Authorize**.
+- Ao clicar, o usuário poderá inserir o token no formato:
+
+```
+Bearer SEU_TOKEN_AQUI
+```
+
+- Todas as requisições subsequentes enviadas pelo Swagger incluirão automaticamente o cabeçalho:
+
+```
+Authorization: Bearer SEU_TOKEN_AQUI
+```
+
+- Endpoints protegidos por `.RequireAuthorization()` funcionarão normalmente.
+
+### 7.6.5 Exemplo Prático de Uso
+1. Gerar token via terminal:
+
+```bash
+dotnet user-jwts create --audience rangos-api --claim country=Brazil --role admin
+```
+
+2. Abrir o Swagger em ambiente de desenvolvimento.
+3. Clicar em **Authorize**.
+4. Inserir o token gerado.
+5. Testar endpoints protegidos, como:
+
+```
+PUT /rangos/{rangoId}
+DELETE /rangos/{rangoId}
+```
+
+### 7.6.6 Benefícios da Integração
+- Facilita testes de autenticação e autorização.
+- Permite validar policies, roles e claims diretamente no Swagger.
+- Melhora a documentação da API ao indicar claramente que o endpoint exige token.
+- Reduz erros de configuração ao testar manualmente.
+
+### 7.6.7 Comparação: Segurança no Swagger vs Segurança no Código
+
+| Aspecto | Swagger | Código |
+|--------|---------|--------|
+| Testes | Permite testar tokens facilmente | Depende de ferramentas externas |
+| Documentação | Exibe requisitos de segurança | Não documenta automaticamente |
+| Segurança | Apenas para desenvolvimento | Segurança real da API |
+| Usabilidade | Interface amigável | Requer conhecimento técnico |
+
+### 7.6.8 Conclusão
+Adicionar suporte a tokens JWT no Swagger é essencial para testar APIs protegidas de forma prática e eficiente. A configuração apresentada integra o esquema Bearer ao Swagger, permitindo que desenvolvedores utilizem tokens gerados via CLI ou provedores externos diretamente na interface de documentação.
+
+A seguir, seria interessante documentar a seção **7.7**, abordando como adicionar *roles*, *claims* e *policies* diretamente na documentação do Swagger para melhorar ainda mais a clareza da API.
