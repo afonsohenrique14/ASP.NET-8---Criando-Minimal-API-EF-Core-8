@@ -4554,3 +4554,182 @@ DELETE /rangos/{rangoId}
 Adicionar suporte a tokens JWT no Swagger é essencial para testar APIs protegidas de forma prática e eficiente. A configuração apresentada integra o esquema Bearer ao Swagger, permitindo que desenvolvedores utilizem tokens gerados via CLI ou provedores externos diretamente na interface de documentação.
 
 A seguir, seria interessante documentar a seção **7.7**, abordando como adicionar *roles*, *claims* e *policies* diretamente na documentação do Swagger para melhorar ainda mais a clareza da API.
+## 7.7 Adicionando ASP.NET Core Identity à Minimal API
+
+### 7.7.1 Introdução
+A integração do **ASP.NET Core Identity** em uma aplicação Minimal API adiciona um sistema completo de autenticação e gerenciamento de usuários, incluindo criação de contas, login, logout, roles, claims e armazenamento seguro de credenciais. Essa abordagem substitui a necessidade de criar manualmente mecanismos de autenticação e permite que a API utilize um modelo robusto e extensível baseado em Entity Framework Core.
+
+A configuração apresentada utiliza `IdentityDbContext`, `AddIdentityApiEndpoints` e mapeamento automático de endpoints de identidade, permitindo que a API exponha rotas prontas para cadastro e autenticação.
+
+---
+
+### 7.7.2 Instalação do Pacote Necessário
+
+```bash
+dotnet add package Microsoft.AspNetCore.Identity.EntityFrameworkCore
+```
+
+Esse pacote adiciona:
+- Entidades padrão do Identity (IdentityUser, IdentityRole).
+- Integração com Entity Framework Core.
+- Suporte a migrações e persistência de usuários.
+
+---
+
+### 7.7.3 Atualização do DbContext para Identity
+
+```csharp
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
+using RangoAgil.API.Entities;
+
+namespace RangoAgil.API.DbContexts;
+
+public class RangoDbContext(DbContextOptions<RangoDbContext> options) : IdentityDbContext(options)
+{
+    public DbSet<Rango> Rangos { get; set; } = null!;
+    public DbSet<Ingrediente> Ingredientes { get; set; } = null!;
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        // Seeds de Ingredientes e Rangos
+        // Relacionamentos Many-to-Many
+        // (Conteúdo mantido conforme fornecido pelo usuário)
+
+        base.OnModelCreating(modelBuilder);
+    }
+}
+```
+
+Explicação:
+- `IdentityDbContext` adiciona automaticamente tabelas como:
+  - AspNetUsers  
+  - AspNetRoles  
+  - AspNetUserRoles  
+  - AspNetUserClaims  
+  - AspNetUserLogins  
+  - AspNetUserTokens  
+
+---
+
+### 7.7.4 Registro do Identity no Pipeline de Serviços
+
+```csharp
+builder.Services.AddIdentityApiEndpoints<IdentityUser>()
+    .AddEntityFrameworkStores<RangoDbContext>();
+```
+
+Essa configuração:
+- Registra o Identity com o tipo padrão `IdentityUser`.
+- Usa o `RangoDbContext` como repositório de dados.
+- Habilita endpoints automáticos como:
+  - POST /identity/register  
+  - POST /identity/login  
+  - POST /identity/refresh  
+  - POST /identity/logout  
+
+---
+
+### 7.7.5 Configuração de Autenticação e Autorização
+
+```csharp
+builder.Services.AddAuthentication().AddJwtBearer();
+builder.Services.AddAuthorization();
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("RequireAdminFromBrazil", policy =>
+        policy.RequireRole("admin").RequireClaim("country", "Brazil"))
+    .AddPolicy("RequirManagerFromBrazil", policy =>
+        policy.RequireRole("Manager").RequireClaim("country", "Brazil"));
+```
+
+Essa configuração permite:
+- Validar tokens JWT.
+- Criar políticas baseadas em roles e claims.
+- Integrar Identity com JWT.
+
+---
+
+### 7.7.6 Registro dos Endpoints de Identidade
+
+```csharp
+public static void RegisterIdentityEndpoint(this IEndpointRouteBuilder app)
+{
+    app.MapGroup("/identity/").MapIdentityApi<IdentityUser>();
+}
+```
+
+Esse mapeamento adiciona automaticamente:
+- Registro de usuário.
+- Login.
+- Logout.
+- Refresh token.
+- Gerenciamento básico de conta.
+
+---
+
+### 7.7.7 Pipeline Completo com Identity
+
+```csharp
+var app = builder.Build();
+
+app.UseHttpsRedirection();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+if (app.Environment.IsProduction())
+{
+    app.UseExceptionHandler();
+}
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+app.RegisterRangosEndpoints();
+app.RegisterIngredientesEndpoints();
+app.RegisterIdentityEndpoint();
+
+app.Run();
+```
+
+---
+
+### 7.7.8 Explicação da Sintaxe
+- **AddIdentityApiEndpoints** adiciona endpoints REST prontos para uso.
+- **AddEntityFrameworkStores** persiste usuários no banco SQLite.
+- **MapIdentityApi** expõe rotas de autenticação automaticamente.
+- **UseAuthentication** valida tokens e cookies.
+- **UseAuthorization** aplica políticas e roles.
+
+---
+
+### 7.7.9 Benefícios da Integração com Identity
+- Sistema completo de autenticação sem implementação manual.
+- Suporte nativo a roles e claims.
+- Persistência segura de senhas com hashing.
+- Endpoints REST automáticos para login e registro.
+- Integração direta com JWT Bearer.
+- Extensível para MFA, lockout, confirmação de e-mail e muito mais.
+
+---
+
+### 7.7.10 Comparação: Identity vs JWT Manual
+
+| Característica | Identity | JWT Manual |
+|----------------|----------|------------|
+| Persistência de usuários | Completa | Necessário implementar |
+| Roles e claims | Nativo | Manual |
+| Endpoints de login | Automáticos | Implementação própria |
+| Segurança | Alta | Depende da implementação |
+| Escalabilidade | Alta | Moderada |
+
+---
+
+### 7.7.11 Conclusão
+A adição do ASP.NET Core Identity transforma a Minimal API em uma plataforma completa de autenticação e autorização, com suporte robusto a usuários, roles, claims e políticas. A integração com JWT e Swagger torna o ambiente ideal para desenvolvimento seguro e escalável.
+
+A seguir, seria natural documentar a seção **7.8**, abordando confirmação de e-mail, redefinição de senha ou roles avançadas dentro do Identity.
